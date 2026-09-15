@@ -7,7 +7,7 @@
 // when there's genuinely no network. Bump CACHE whenever the shell's
 // behavior changes in a way that matters even for a moment of staleness
 // (like this comment doing exactly that).
-const CACHE = 'rc-shell-v9';
+const CACHE = 'rc-shell-v10';
 const SHELL = [
   '.', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',

@@ -23,6 +23,7 @@ rc-encode = { path = "../crates/encode" }
 rc-transport = { path = "../crates/transport" }
 rc-clipboard = { path = "../crates/clipboard" }
 rc-discovery = { path = "../crates/discovery" }
+rc-audio = { path = "../crates/audio" }
 
 anyhow.workspace = true
 thiserror.workspace = true

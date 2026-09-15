@@ -33,6 +33,20 @@ pub struct Settings {
     pub network: NetworkSettings,
     pub security: SecuritySettings,
     pub update: UpdateSettings,
+    pub audio: AudioSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioSettings {
+    /// Stream whatever this PC is playing to the connected device.
+    pub enabled: bool,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +122,7 @@ impl Default for Settings {
             network: NetworkSettings::default(),
             security: SecuritySettings::default(),
             update: UpdateSettings::default(),
+            audio: AudioSettings::default(),
         }
     }
 }

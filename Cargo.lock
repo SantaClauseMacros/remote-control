@@ -978,8 +978,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rc-audio"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+]
+
+[[package]]
 name = "rc-capture"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "thiserror 2.0.20",
@@ -990,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "rc-clipboard"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "tracing",
@@ -999,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "rc-common"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -1013,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "rc-crypto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "data-encoding",
@@ -1026,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "rc-decode"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "rc-capture",
@@ -1040,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "rc-desktop-client"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "data-encoding",
@@ -1062,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "rc-discovery"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "mdns-sd",
@@ -1071,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "rc-encode"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "rc-capture",
@@ -1084,11 +1094,12 @@ dependencies = [
 
 [[package]]
 name = "rc-host"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "data-encoding",
  "qrcode",
+ "rc-audio",
  "rc-capture",
  "rc-clipboard",
  "rc-common",
@@ -1114,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "rc-input"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "rc-protocol",
@@ -1126,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "rc-protocol"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "postcard",
  "serde",
@@ -1134,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "rc-relay"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1147,7 +1158,7 @@ dependencies = [
 
 [[package]]
 name = "rc-transport"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1165,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "rc-web"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "getrandom",
  "js-sys",

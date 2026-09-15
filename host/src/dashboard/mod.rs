@@ -217,6 +217,7 @@ impl App {
                     autostart = Some(on);
                 }
                 "clipboardSync" => s.security.clipboard_sync = as_bool()?,
+                "streamAudio" => s.audio.enabled = as_bool()?,
                 "lanDiscovery" => s.network.lan_discovery = as_bool()?,
                 "quality" => {
                     s.performance.mode = match as_str()? {
@@ -385,6 +386,7 @@ fn settings_view(s: &Settings, autostart: bool) -> Value {
         "enableRemoteAccess": s.enable_remote_access,
         "startWithWindows": autostart,
         "clipboardSync": s.security.clipboard_sync,
+        "streamAudio": s.audio.enabled,
         "lanDiscovery": s.network.lan_discovery,
         "quality": match s.performance.mode {
             QualityMode::Low => "low",

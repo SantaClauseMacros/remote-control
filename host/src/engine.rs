@@ -303,6 +303,7 @@ async fn begin_session(
         max_bitrate_kbps: settings.performance.max_bitrate_kbps,
         mode: settings.performance.mode,
         clipboard_sync: settings.security.clipboard_sync,
+        audio: settings.audio.enabled,
     };
     let stats = Arc::new(session::LiveStats::default());
     let task_stats = stats.clone();

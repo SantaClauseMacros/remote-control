@@ -61,6 +61,7 @@
     <button data-act="specials" class="ctl">⋯<span>Special</span></button>
     <button data-act="mode" class="ctl" id="mode-btn">🖱<span>Trackpad</span></button>
     <button data-act="quality" class="ctl">◔<span>Quality</span></button>
+    <button data-act="sound" class="ctl" id="sound-btn">🔊<span>Sound</span></button>
     <button data-act="disconnect" class="ctl danger">⏻<span>Leave</span></button>
   </div>
 
@@ -151,8 +152,8 @@
 <!-- ─── Game controls help ──────────────────────────────────────── -->
 <dialog id="dlg-help">
   <form method="dialog">
-    <h2>Minecraft controls</h2>
-    <ul class="help">
+    <h2 id="help-title">Minecraft controls</h2>
+    <ul class="help" id="help-list">
       <li><b>Tap anywhere</b> — hit · <b>hold</b> — mine</li>
       <li><b>Drag</b> — look around</li>
       <li><b>Hotbar</b> — tap the slot right on the game's own hotbar</li>
@@ -163,6 +164,7 @@
       <li>In your inventory and menus, tap exactly where you want to click; hold to drag an item</li>
       <li><b>🕹</b> — show / hide controls · <b>⋯</b> — keyboard, quality, leave</li>
     </ul>
+    <div id="help-mc">
     <label class="row">Hotbar size (match Minecraft's GUI Scale)
       <select name="gui">
         <option value="0">Auto</option>
@@ -174,10 +176,20 @@
         <option value="6">6</option>
       </select>
     </label>
-    <p class="help-note dim">Play Minecraft fullscreen (F11) so the hotbar lines up.</p>
+    <p class="help-note dim">If the hotbar targets don't line up, match this to Minecraft's GUI Scale setting.</p>
+    </div>
     <menu><button value="ok" class="btn primary">Got it</button></menu>
   </form>
 </dialog>
+
+<div id="game-sheet" class="sheet" hidden>
+  <div class="sheet-title">Which game are you playing?</div>
+  <button data-game="minecraft">⛏️ Minecraft</button>
+  <button data-game="roblox">🟥 Roblox</button>
+  <button data-game="fortnite">🎯 Fortnite</button>
+  <button data-game="any">🕹️ Any other game</button>
+  <button data-game="cancel">Cancel</button>
+</div>
 
 <div id="quality-sheet" class="sheet" hidden>
   <button data-q="low">Low — smoothest</button>

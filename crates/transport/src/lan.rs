@@ -59,6 +59,8 @@ const CH_CONTROL: u8 = 0;
 const CH_VIDEO: u8 = 1;
 const CH_KEEPALIVE: u8 = 2;
 const CH_KEYFRAME_REQ: u8 = 3;
+/// Encoded sound packets, host → client (see `rc_audio::adpcm`).
+const CH_AUDIO: u8 = 4;
 
 fn err<E: std::fmt::Display>(e: E) -> TransportError {
     TransportError::Other(e.to_string())
@@ -361,6 +363,12 @@ impl LanSession {
         self.was_pairing
     }
 
+    /// Send one encoded sound packet, on its own channel of the same
+    /// encrypted stream as everything else.
+    pub async fn send_audio(&self, packet: &[u8]) -> TResult<()> {
+        self.control.wire.write_message(CH_AUDIO, packet).await
+    }
+
     /// Connect over LAN TCP as the initiating client.
     pub async fn connect<A: ToSocketAddrs>(
         addr: A,
@@ -539,6 +547,9 @@ async fn reader_loop(
                 }
             }
             Ok((CH_KEYFRAME_REQ, _)) => key_frame_req.store(true, Ordering::Release),
+            // Sound is played by the browser client; the native viewer doesn't
+            // play it (yet), so it's dropped here rather than logged.
+            Ok((CH_AUDIO, _)) => {}
             Ok((other, _)) => tracing::warn!(channel = other, "unknown channel"),
             Err(e) => {
                 tracing::info!(error = %e, "reader loop ending");

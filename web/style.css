@@ -209,6 +209,10 @@ body { display: flex; flex-direction: column; }
 .pad-slot-flash.on { animation: slot-flash .35s ease-out; }
 @keyframes slot-flash { from { opacity: 1; } to { opacity: 0; } }
 .pad button.pad-beside { position: absolute; }
+/* Number keys for games without an overlay hotbar — see-through, since they
+   sit over the game's own item bar. */
+.pad-slots { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 6px; }
+.pad-slots button { width: 42px; height: 40px; background: rgba(30,35,42,.4); }
 
 .thumb-toggle {
   position: absolute; left: 14px; top: 14px;
@@ -281,3 +285,5 @@ dialog menu { display: flex; gap: 10px; justify-content: flex-end; margin: 8px 0
   border-radius: 12px; padding: 15px; font-size: 16px; text-align: left;
 }
 .sheet button:active { background: var(--accent); color: #fff; }
+.sheet-title { color: var(--dim); font-size: 13px; padding: 2px 4px 4px; }
+.sheet button.on { border-color: var(--accent); }

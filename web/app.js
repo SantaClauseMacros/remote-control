@@ -47,6 +47,97 @@ function bindTap(el, fn) {
   el.addEventListener('click', fn);
 }
 const CH_VIDEO = 1;
+const CH_AUDIO = 4;
+
+/* ─────────────────────────  sound  ──────────────────────────────────── */
+/*
+ * The PC's sound arrives as IMA ADPCM packets (layout in
+ * crates/audio/src/adpcm.rs — this decoder must match it), decoded here and
+ * queued on the Web Audio clock. Plain JavaScript on purpose: it works in
+ * every browser, including iPhone Safari, which has no WebCodecs audio.
+ */
+const ADPCM_STEP = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
+  73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408,
+  449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630,
+  9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+  32767,
+];
+const ADPCM_INDEX = [-1, -1, -1, -1, 2, 4, 6, 8];
+
+/** One packet → `{ channels, rate, frames, data: Float32Array[] }`, or null. */
+function decodeAdpcm(u8) {
+  if (u8.length < 8 || u8[0] !== 1) return null;
+  const channels = u8[1];
+  if (channels < 1 || channels > 2) return null;
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const rate = dv.getUint32(2, true), frames = dv.getUint16(6, true);
+  let pos = 8;
+  const total = frames * channels;
+  if (u8.length < pos + 4 * channels + Math.ceil(total / 2) || rate < 3000) return null;
+  const pred = [], index = [], data = [];
+  for (let c = 0; c < channels; c++) {
+    pred.push(dv.getInt16(pos, true));
+    index.push(Math.min(88, u8[pos + 2]));
+    data.push(new Float32Array(frames));
+    pos += 4;
+  }
+  for (let i = 0; i < total; i++) {
+    const byte = u8[pos + (i >> 1)];
+    const code = (i & 1) ? byte >> 4 : byte & 15;
+    const c = i % channels;
+    const step = ADPCM_STEP[index[c]];
+    let delta = step >> 3;
+    if (code & 4) delta += step;
+    if (code & 2) delta += step >> 1;
+    if (code & 1) delta += step >> 2;
+    let p = (code & 8) ? pred[c] - delta : pred[c] + delta;
+    p = p < -32768 ? -32768 : p > 32767 ? 32767 : p;
+    pred[c] = p;
+    const ix = index[c] + ADPCM_INDEX[code & 7];
+    index[c] = ix < 0 ? 0 : ix > 88 ? 88 : ix;
+    data[c][(i / channels) | 0] = p / 32768;
+  }
+  return { channels, rate, frames, data };
+}
+
+class SoundPlayer {
+  constructor() { this.ctx = null; this.gain = null; this.at = 0; }
+  get muted() { return !!store.settings.muted; }
+  /** Browsers only let sound start from a tap or click — call from one. */
+  unlock() {
+    try {
+      if (!this.ctx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        this.ctx = new Ctx({ latencyHint: 'interactive' });
+        this.gain = this.ctx.createGain();
+        this.gain.connect(this.ctx.destination);
+      }
+      if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    } catch {}
+  }
+  reset() { this.at = 0; }
+  push(packet) {
+    if (this.muted || !this.ctx || this.ctx.state !== 'running') return;
+    const p = decodeAdpcm(packet);
+    if (!p || !p.frames) return;
+    const buf = this.ctx.createBuffer(p.channels, p.frames, p.rate);
+    for (let c = 0; c < p.channels; c++) buf.getChannelData(c).set(p.data[c]);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(this.gain);
+    const now = this.ctx.currentTime;
+    // Play each packet right after the last one, with a small cushion ahead of
+    // the clock. After a gap (nothing was playing) or a burst that ran too far
+    // ahead, restart just ahead of now so sound never trails the picture.
+    if (this.at < now + 0.01 || this.at > now + 0.3) this.at = now + 0.06;
+    src.start(this.at);
+    this.at += p.frames / p.rate;
+  }
+}
+const sound = new SoundPlayer();
 
 /* ─────────────────────────  persistent state  ───────────────────────── */
 const store = {
@@ -54,7 +145,7 @@ const store = {
   set devices(v) { localStorage.rc_devices = JSON.stringify(v); },
   get settings() {
     return Object.assign(
-      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true },
+      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true, muted: false },
       (() => { try { return JSON.parse(localStorage.rc_settings || '{}'); } catch { return {}; } })());
   },
   set settings(v) { localStorage.rc_settings = JSON.stringify(v); },
@@ -296,6 +387,8 @@ class Conn {
       if (ch === CH_VIDEO) {
         const v = parse_video_payload(payload);
         this.onvideo(new Uint8Array(v.data), v.key_frame, v.timestamp_us);
+      } else if (ch === CH_AUDIO) {
+        sound.push(payload);
       } else {
         try { this.onhost(decode_host_message(payload)); } catch {}
       }
@@ -462,16 +555,30 @@ const CODE_VK = (() => {
  * to the stage's corners; `hotbar` lays invisible slot targets over the game's
  * own hotbar in the video, with `left` / `right` buttons docked beside it.
  * Button fields: `vk` (a key), `btn` (mouse button), `toggle` (latches on and
- * off), `act` (an app action). Only Minecraft so far — add the next game here.
+ * off), `act` (an app action). `slots` is a row of number keys at the bottom;
+ * `freeTouch` is how a drag or tap behaves while the game doesn't have the mouse
+ * captured; `help` fills the ? sheet. Add a game by adding an entry here.
  */
 const GAME_MODES = {
   minecraft: {
     name: 'Minecraft',
+    // With a menu or the inventory open, tap exactly where you want to click.
+    freeTouch: 'direct',
+    help: [
+      '<b>Tap anywhere</b> — hit · <b>hold</b> — mine · <b>drag</b> — look around',
+      '<b>Hotbar</b> — tap the slot right on the game\'s own hotbar',
+      '<b>Inv</b> left of the hotbar · <b>Drop</b> right of it',
+      '<b>Use</b> or <b>two-finger tap</b> — place / eat / use',
+      '<b>Joystick</b> — walk · <b>Jump</b> · <b>Sprint</b> (Shift) and <b>Crouch</b> (Ctrl) tap on / off',
+      '<b>Esc</b>, <b>Chat</b>, <b>View</b> (F5), <b>Swap</b> (F) — top-left',
+      'In your inventory and menus, tap exactly where you want to click; hold to drag an item',
+    ],
     topLeft: [
       { label: 'Esc', vk: 27 },
       { label: 'Chat', vk: 84 },  // T
       { label: 'View', vk: 116 }, // F5
       { label: 'Swap', vk: 70 },  // F — offhand
+      { label: 'Game', act: 'pickGame' },
       { label: '?', act: 'help' },
     ],
     right: [
@@ -495,6 +602,97 @@ const GAME_MODES = {
         return { x: (vw - w) / 2, y: vh - h, w, h, slotX0: s, slotW: 20 * s };
       },
     },
+  },
+
+  roblox: {
+    name: 'Roblox',
+    // Outside first person the cursor is free: a drag swings the camera (right
+    // mouse held) and a tap clicks right where you tap — buttons, shops, tools.
+    freeTouch: 'camera',
+    help: [
+      '<b>Drag</b> — turn the camera · <b>tap</b> — click right there',
+      '<b>Joystick</b> — walk · <b>Jump</b>',
+      '<b>Shift</b> — hold to sprint, or tap for shift lock in games that use it',
+      '<b>E</b> — interact (hold it for “hold E” prompts)',
+      '<b>Click</b> — hold the mouse button, for tools that need holding',
+      '<b>1–6</b> — pick a tool from your backpack',
+      '<b>Esc</b>, <b>Chat</b>, <b>Players</b> (Tab), <b>Zoom</b> (I / O) — top-left',
+    ],
+    topLeft: [
+      { label: 'Esc', vk: 27 },
+      { label: 'Chat', vk: 191 },   // /
+      { label: 'Players', vk: 9 },  // Tab
+      { label: 'Zoom+', vk: 73 },   // I
+      { label: 'Zoom−', vk: 79 },   // O
+      { label: 'Game', act: 'pickGame' },
+      { label: '?', act: 'help' },
+    ],
+    right: [
+      { label: 'Shift', vk: 160 },
+      { label: 'E', vk: 69 },
+      { label: 'Click', btn: 0 },
+      { label: 'Jump', vk: 32 },
+    ],
+    slots: [1, 2, 3, 4, 5, 6].map(n => ({ label: String(n), vk: 48 + n })),
+  },
+
+  fortnite: {
+    name: 'Fortnite',
+    freeTouch: 'direct',
+    help: [
+      '<b>Drag</b> — aim · <b>Fire</b> — hold to shoot · <b>tap anywhere</b> — single shot',
+      '<b>Aim</b> — tap to aim down sights, tap again to stop',
+      '<b>Joystick</b> — move · <b>Jump</b> · <b>Crouch</b> toggles',
+      '<b>Reload</b> (R) · <b>Use</b> (E) — open, pick up, revive',
+      '<b>1–6</b> — switch weapon or item',
+      '<b>Esc</b>, <b>Map</b> (M), <b>Inv</b> (Tab), <b>Emote</b> (B) — top-left',
+      'Uses Fortnite\'s default keyboard controls.',
+    ],
+    topLeft: [
+      { label: 'Esc', vk: 27 },
+      { label: 'Map', vk: 77 },
+      { label: 'Inv', vk: 9 },
+      { label: 'Emote', vk: 66 },
+      { label: 'Game', act: 'pickGame' },
+      { label: '?', act: 'help' },
+    ],
+    right: [
+      { label: 'Aim', btn: 1, toggle: true },
+      { label: 'Fire', btn: 0 },
+      { label: 'Reload', vk: 82 },
+      { label: 'Use', vk: 69 },
+      { label: 'Crouch', vk: 162, toggle: true }, // left Ctrl
+      { label: 'Jump', vk: 32 },
+    ],
+    slots: [1, 2, 3, 4, 5, 6].map(n => ({ label: String(n), vk: 48 + n })),
+  },
+
+  any: {
+    name: 'Any game',
+    freeTouch: 'chosen',
+    help: [
+      '<b>Joystick</b> — W A S D · <b>Jump</b> — Space',
+      '<b>Shift</b> and <b>Ctrl</b> — held while your finger is down',
+      '<b>Q</b>, <b>E</b>, <b>R</b>, <b>F</b> and <b>1–6</b> — the keys most games use',
+      'When a game grabs the mouse: <b>drag</b> to look, <b>tap</b> to click, <b>hold</b> to keep clicking',
+      'Otherwise touch works the way you picked in <b>⋯ → Trackpad</b>',
+    ],
+    topLeft: [
+      { label: 'Esc', vk: 27 },
+      { label: 'Tab', vk: 9 },
+      { label: 'Game', act: 'pickGame' },
+      { label: '?', act: 'help' },
+    ],
+    right: [
+      { label: 'Q', vk: 81 },
+      { label: 'E', vk: 69 },
+      { label: 'R', vk: 82 },
+      { label: 'F', vk: 70 },
+      { label: 'Shift', vk: 160 },
+      { label: 'Ctrl', vk: 162 },
+      { label: 'Jump', vk: 32 },
+    ],
+    slots: [1, 2, 3, 4, 5, 6].map(n => ({ label: String(n), vk: 48 + n })),
   },
 };
 
@@ -572,6 +770,7 @@ class Viewer {
     this._bindControls();
     this._bindKeyboard();
     this._bindJoystick();
+    this._syncSoundButton();
     if (!this.isTouch) {
       // "Keys" only exists to summon a phone's soft keyboard — meaningless
       // with a real keyboard already attached.
@@ -675,6 +874,7 @@ class Viewer {
     if (document.pointerLockElement === $('#stage')) document.exitPointerLock();
     try { this._wake && this._wake.release(); } catch {}
     this.dec.reset();
+    sound.reset();
     this.conn.close();
     if (V === this) V = null;
     show('list');
@@ -687,8 +887,14 @@ class Viewer {
    * point-and-tap in its menus and inventory. Otherwise the chosen mode,
    * unless a game has captured the mouse anyway. */
   get touchStyle() {
-    if (this.padOn) return this.hostCaptured ? 'look' : 'direct';
-    return this.hostCaptured ? 'look' : this.mode;
+    if (this.hostCaptured) return 'look';
+    if (this.padOn) {
+      // 'direct' (tap where you point), 'camera' (drag turns the camera), or
+      // 'chosen' (whatever pointer mode is picked in the ⋯ menu).
+      const free = (GAME_MODES[store.settings.game] || GAME_MODES.minecraft).freeTouch;
+      return free === 'chosen' ? this.mode : free;
+    }
+    return this.mode;
   }
 
   /* ── input senders ── */
@@ -824,8 +1030,11 @@ class Viewer {
       store.settings = { ...store.settings, joystick: on };
       this._layoutPad();
     };
+    this._setPadVisible = setVisible;
     bindTap(toggle, () => {
       const on = zone.hidden;
+      // First time: pick the game, which then shows its controls.
+      if (on && !GAME_MODES[store.settings.game]) { this._pickGame(); return; }
       setVisible(on);
       if (on && !store.settings.padHelpSeen) {
         store.settings = { ...store.settings, padHelpSeen: true };
@@ -852,6 +1061,7 @@ class Viewer {
 
     stage.addEventListener('touchstart', e => {
       e.preventDefault();
+      sound.unlock(); // resumes sound the browser paused while in the background
       for (const t of e.changedTouches) {
         const p = pos(t);
         pts.set(t.identifier, { ...p, x0: p.x, y0: p.y, t0: performance.now() });
@@ -893,11 +1103,19 @@ class Viewer {
       if (g === 'pending' || g === 'move' || g === 'drag') {
         const t = [...pts.values()][0];
         const moved = Math.hypot(t.x - t.x0, t.y - t.y0);
-        if (g === 'pending' && moved > 8) { g = 'move'; clearTimeout(lp); }
+        if (g === 'pending' && moved > 8) {
+          g = 'move'; clearTimeout(lp);
+          // Camera games (Roblox): a drag holds the right mouse button, which
+          // is what swings the camera while the cursor is free.
+          if (this.touchStyle === 'camera' && !this._camHeld) {
+            this._camHeld = true;
+            this.button(1, true);
+          }
+        }
         if (g === 'move' || g === 'drag') {
           const px = t._px ?? t.x0, py = t._py ?? t.y0;
           const style = this.touchStyle;
-          if (style === 'look') {
+          if (style === 'look' || this._camHeld) {
             // Camera look: the game owns the cursor and reads raw relative
             // motion, so send the drag as a delta rather than steering an
             // absolute pointer that would fight the game's own recentring.
@@ -952,7 +1170,7 @@ class Viewer {
         const cur = pts.get(t.identifier);
         if (g === 'pending' && cur && now - cur.t0 < 250 &&
             Math.hypot(cur.x - cur.x0, cur.y - cur.y0) < 8) {
-          if (this.touchStyle === 'direct') {
+          if (this.touchStyle === 'direct' || this.touchStyle === 'camera') {
             const n = this.dec.screenToNorm(cur.x, cur.y); this.moveTo(n.x, n.y);
           }
           this.click(0);
@@ -968,12 +1186,14 @@ class Viewer {
         if (now - twoStart.t0 < 260 && twoStart.moved < 16) this.click(1);
       }
       clearTimeout(lp);
+      if (this._camHeld && pts.size === 0) { this.button(1, false); this._camHeld = false; }
       if (pts.size === 0) { g = null; twoStart = null; }
       else if (pts.size === 1) { g = 'pending'; }
     }, { passive: false });
 
     stage.addEventListener('touchcancel', () => {
       clearTimeout(lp); pts.clear(); g = null; twoStart = null;
+      if (this._camHeld) { this.button(1, false); this._camHeld = false; }
       if (this.dragging) { this.button(0, false); this.dragging = false; }
     });
   }
@@ -1041,6 +1261,7 @@ class Viewer {
 
     stage.addEventListener('mousedown', e => {
       e.preventDefault();
+      sound.unlock();
       // A laptop has a real keyboard — typing should just work while
       // looking at the screen, not require hunting for the "Keys" button
       // first (that's there for phones, which need it to summon the soft
@@ -1121,9 +1342,11 @@ class Viewer {
   _buildPad(pad) {
     const mode = GAME_MODES[store.settings.game] || GAME_MODES.minecraft;
     pad.textContent = '';
-    const latched = new Set();
+    // Latched toggles, keyed by what they hold down, so they can all be let go.
+    const latched = new Map();
+    const hold = (spec, on) => (spec.btn != null ? this.button(spec.btn, on) : this.key(spec.vk, on));
     this._releasePad = () => {
-      for (const vk of latched) this.key(vk, false);
+      for (const spec of latched.values()) hold(spec, false);
       latched.clear();
       pad.querySelectorAll('.latched').forEach(b => b.classList.remove('latched'));
     };
@@ -1153,12 +1376,14 @@ class Viewer {
     };
     const act = (spec, el, down) => {
       if (spec.act === 'help') { if (down) this._showHelp(); return; }
+      if (spec.act === 'pickGame') { if (down) this._pickGame(); return; }
       if (spec.toggle) {
         if (!down) return;
-        const on = !latched.has(spec.vk);
-        on ? latched.add(spec.vk) : latched.delete(spec.vk);
+        const id = spec.btn != null ? 'btn' + spec.btn : 'vk' + spec.vk;
+        const on = !latched.has(id);
+        on ? latched.set(id, spec) : latched.delete(id);
         el.classList.toggle('latched', on);
-        this.key(spec.vk, on);
+        hold(spec, on);
       } else {
         if (spec.btn != null) this.button(spec.btn, down);
         else if (spec.vk) this.key(spec.vk, down);
@@ -1173,7 +1398,8 @@ class Viewer {
       bindTouch(el, () => act(spec, el, true), () => act(spec, el, false));
       return el;
     };
-    for (const [cls, specs] of [['pad-top-left', mode.topLeft], ['pad-main', mode.right]]) {
+    for (const [cls, specs] of [['pad-top-left', mode.topLeft], ['pad-main', mode.right], ['pad-slots', mode.slots]]) {
+      if (!specs) continue;
       const g = document.createElement('div');
       g.className = cls;
       for (const s of specs || []) g.appendChild(make(s));
@@ -1252,10 +1478,44 @@ class Viewer {
     place(H.right, x + w + gap);
   }
 
+  /** Choose which game the pad is laid out for. */
+  _pickGame() {
+    const sheet = $('#game-sheet');
+    sheet.querySelectorAll('[data-game]').forEach(b =>
+      b.classList.toggle('on', b.dataset.game === store.settings.game));
+    sheet.hidden = false;
+    sheet.onclick = e => {
+      const key = e.target.closest('[data-game]')?.dataset.game;
+      if (!key) return;
+      sheet.hidden = true;
+      if (!GAME_MODES[key]) return; // "Cancel"
+      this._releasePad && this._releasePad();
+      store.settings = { ...store.settings, game: key };
+      this._buildPad($('#pad'));
+      this._setPadVisible && this._setPadVisible(true);
+      toast(`${GAME_MODES[key].name} controls — tap ? for help`, 1800);
+    };
+  }
+
+  _syncSoundButton() {
+    const b = $('#sound-btn');
+    if (!b) return;
+    b.firstChild.textContent = sound.muted ? '🔇' : '🔊';
+    b.classList.toggle('on', !sound.muted);
+  }
+
   /** Cheat sheet for the game pad, plus the hotbar-size setting. */
   _showHelp() {
     const d = $('#dlg-help');
     if (d.open) return;
+    const mode = GAME_MODES[store.settings.game] || GAME_MODES.minecraft;
+    $('#help-title').textContent = `${mode.name} controls`;
+    // Static strings from GAME_MODES — nothing user-provided goes in here.
+    $('#help-list').innerHTML = [
+      ...mode.help,
+      '<b>Game</b> — switch game · <b>🕹</b> — show / hide controls · <b>⋯</b> — keyboard, sound, quality, leave',
+    ].map(h => `<li>${h}</li>`).join('');
+    $('#help-mc').hidden = !mode.hotbar;
     const sel = d.querySelector('select[name="gui"]');
     sel.value = String(+store.settings.mcGuiScale || 0);
     d.addEventListener('close', () => {
@@ -1350,6 +1610,13 @@ class Viewer {
       else if (act === 'specials') $('#specials').hidden = !$('#specials').hidden;
       else if (act === 'disconnect') this._end();
       else if (act === 'quality') $('#quality-sheet').hidden = false;
+      else if (act === 'sound') {
+        store.settings = { ...store.settings, muted: !sound.muted };
+        sound.unlock();
+        sound.reset();
+        this._syncSoundButton();
+        toast(sound.muted ? 'Sound off' : 'Sound on');
+      }
       else if (act === 'mode') {
         if (this.hasMouse) {
           this._toggleMouseLook();
@@ -1451,6 +1718,7 @@ class Viewer {
 }
 
 async function connect(device) {
+  sound.unlock(); // still inside the Connect tap — the browser allows it now
   if (V) V._end();
   V = new Viewer(device);
   await V.start();

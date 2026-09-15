@@ -63,7 +63,17 @@ Click the tray icon to open it.
 
 **On a laptop or Chromebook,** your mouse and keyboard just work. When a game grabs the mouse, your first click locks it for aiming — press **Esc** to get it back.
 
-### 🎮 Minecraft mode (phone)
+**Sound:** you hear the PC on your phone automatically. Tap **⋯ → Sound** to mute. (On iPhone, turn the silent switch off.)
+
+### 🎮 Game modes (phone)
+
+Tap **🕹** and pick your game — **Minecraft**, **Roblox**, **Fortnite** or **Any other game**. Each has its own buttons and a **?** help sheet; switch any time with **Game**.
+
+- **Roblox:** drag to turn the camera, tap to click, Shift / E / Click / Jump, and 1–6 for tools
+- **Fortnite:** drag to aim, hold **Fire**, tap **Aim**, Reload, Use, Crouch, Jump, and 1–6 for weapons
+- **Any other game:** joystick for W A S D, Jump, Shift, Ctrl, Q E R F and 1–6
+
+#### Minecraft
 
 Tap **🕹** in the top-left corner to show game controls:
 

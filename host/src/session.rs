@@ -30,6 +30,8 @@ pub struct SessionParams {
     pub mode: QualityMode,
     /// Sync clipboard text in both directions.
     pub clipboard_sync: bool,
+    /// Stream the PC's sound.
+    pub audio: bool,
 }
 
 /// Live numbers from a running session, shared with the dashboard. Written by
@@ -241,6 +243,35 @@ pub async fn run(
         });
     }
 
+    // ── sound ─────────────────────────────────────────────────────────────
+    // Captured on its own thread (WASAPI blocks) and written to the session by
+    // an async task. A full queue drops sound rather than delaying it: a gap is
+    // a click, but a backlog is sound that trails behind the picture.
+    let audio_stop = Arc::new(AtomicBool::new(false));
+    if params.audio {
+        let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+        let stop_flag = audio_stop.clone();
+        std::thread::Builder::new()
+            .name("rc-audio".into())
+            .spawn(move || {
+                let sent = rc_audio::stream_loopback(&stop_flag, |packet| {
+                    let _ = audio_tx.try_send(packet);
+                });
+                if let Err(e) = sent {
+                    tracing::warn!(error = ?e, "sound capture stopped");
+                }
+            })
+            .ok();
+        let sa = session.clone();
+        tokio::spawn(async move {
+            while let Some(packet) = audio_rx.recv().await {
+                if sa.send_audio(&packet).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
     // ── control loop ──────────────────────────────────────────────────────
     let mut injector = Injector::new();
     injector.set_source_rect(Rect {
@@ -435,6 +466,7 @@ pub async fn run(
     tracing::info!(%reason, "session ending");
     capture_stop.store(true, Ordering::SeqCst);
     clip_stop.store(true, Ordering::SeqCst);
+    audio_stop.store(true, Ordering::SeqCst);
     let _ = capture_thread.join();
     drop(encoder_slot); // last ref → flushes and joins the encoder thread
     injector.release_all();

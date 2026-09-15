@@ -228,6 +228,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
         <div class="card-title">Quick settings</div>
         <label class="set-row"><div class="txt"><b>Remote access</b><span class="dim small">Allow devices to connect to this PC</span></div><input type="checkbox" class="switch" data-setting="enableRemoteAccess"></label>
         <label class="set-row"><div class="txt"><b>Start with Windows</b><span class="dim small">So you can connect after the PC restarts</span></div><input type="checkbox" class="switch" data-setting="startWithWindows"></label>
+        <label class="set-row"><div class="txt"><b>Stream sound</b><span class="dim small">Hear this PC on the connected device</span></div><input type="checkbox" class="switch" data-setting="streamAudio"></label>
         <label class="set-row"><div class="txt"><b>Clipboard sync</b><span class="dim small">Share copied text with the connected device</span></div><input type="checkbox" class="switch" data-setting="clipboardSync"></label>
       </div>
 
@@ -290,6 +291,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
 
     <div class="card">
       <h2>Features</h2>
+      <label class="set-row"><div class="txt"><b>Stream sound</b><span class="dim small">Play this PC's sound on the connected device (applies to the next connection)</span></div><input type="checkbox" class="switch" data-setting="streamAudio"></label>
       <label class="set-row"><div class="txt"><b>Clipboard sync</b><span class="dim small">Share copied text both ways while connected</span></div><input type="checkbox" class="switch" data-setting="clipboardSync"></label>
       <label class="set-row"><div class="txt"><b>Show on local network</b><span class="dim small">Lets the desktop viewer find this PC by name</span></div><input type="checkbox" class="switch" data-setting="lanDiscovery"></label>
       <label class="set-row"><div class="txt"><b>Check for updates</b><span class="dim small">Get a notification when a new version is out</span></div><input type="checkbox" class="switch" data-setting="updateChecks"></label>
