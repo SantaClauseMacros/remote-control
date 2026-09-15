@@ -117,6 +117,7 @@ Without VB-CABLE installed, the mic toggle still works — your phone's mic just
 - **Clipboard** text syncs both ways automatically. You can turn that off in the phone app's **⚙** settings.
 - **Second monitor?** Only your primary display is streamed by default. In **Settings → Multiple monitors**, choose to duplicate everything onto the primary display, or move windows there, for the length of a session — it's undone automatically when you disconnect.
 - **PC going to sleep — or its screen turning off — while you're out?** Turn on **Keep this PC awake** in Settings. Windows' screen capture generally can't see a display that's powered off, even though the PC itself is still awake and signed in, so this stops that from happening in the first place.
+- **Want to unplug the monitor entirely** (not just turn it off) **and still connect?** That's a different case — cutting power to a monitor usually also drops the signal Windows uses to notice it's there at all, so the PC can end up with no display to capture no matter what "Keep this PC awake" does. The fix people use for exactly this — running a PC "headless" — is a cheap **HDMI/DisplayPort dummy plug** (~$10, no drivers): it tricks the PC into always seeing a monitor, so you can unplug the real one for good and still connect.
 - **Updates:** the tray icon and app both tell you when a new version is out, with a one-click **Install now** that downloads and installs it, then restarts the app — your PC ID and settings are kept either way.
 
 ---
@@ -141,7 +142,7 @@ Check that the PC is switched on, signed in, and the Remote Control tray icon is
 <details>
 <summary><b>Black screen, or the picture freezes</b></summary>
 
-Tap **⋯ → Leave** and connect again. If it keeps happening, try **⋯ → Quality → Low**. Windows doesn't allow screen capture on the lock screen or on admin prompts, so sign in on the PC first. A screen that turned itself off from Windows' own power-save timeout causes the same freeze — turn on **Keep this PC awake** in Settings to stop that.
+Tap **⋯ → Leave** and connect again. If it keeps happening, try **⋯ → Quality → Low**. Windows doesn't allow screen capture on the lock screen or on admin prompts, so sign in on the PC first. A screen that turned itself off from Windows' own power-save timeout causes the same freeze — turn on **Keep this PC awake** in Settings to stop that. If the app instead tells you it *can't find a display on the PC*, the monitor itself is unplugged or unpowered — see the tip about a dummy plug above.
 </details>
 
 <details>

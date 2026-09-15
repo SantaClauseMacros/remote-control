@@ -233,14 +233,38 @@ pub async fn run(
     // restarting the thread.
     let target_fps = Arc::new(AtomicU32::new(params.fps.clamp(5, 240)));
     let cap_fps = target_fps.clone();
+    // Flipped false after capture fails for about 2 seconds straight (a
+    // monitor that's lost power, not just gone to sleep — see the error
+    // arm below), so the control loop can tell the device why the picture
+    // stopped instead of it just looking like a frozen connection.
+    let capture_ok = Arc::new(AtomicBool::new(true));
+    let cap_ok = capture_ok.clone();
     let capture_thread = std::thread::Builder::new()
         .name("rc-capture".into())
-        .spawn(move || capture_loop(&cap_fps, &geo_tx, &enc_rx, &cap_stop, &cap_gate))
+        .spawn(move || capture_loop(&cap_fps, &geo_tx, &enc_rx, &cap_stop, &cap_gate, &cap_ok))
         .context("spawn capture thread")?;
 
-    let (width, height, rect) = geo_rx
-        .recv()
-        .context("capture thread exited before reporting geometry")??;
+    let (width, height, rect) = match geo_rx.recv().context("capture thread exited before reporting geometry") {
+        Ok(Ok(geo)) => geo,
+        Ok(Err(e)) | Err(e) => {
+            // Otherwise the device just sees the connection fail with no
+            // explanation — this is the one capture error common enough to
+            // name plainly rather than as a generic disconnect: no monitor
+            // detected (unplugged, or its power is off — losing power drops
+            // the hot-plug-detect signal Windows uses to notice a display at
+            // all, which is a different, harder case than a display merely
+            // asleep; see `platform::power` for that one and the README for
+            // a "dummy plug" as the real fix for a truly monitor-less PC).
+            let reason = if e.to_string().contains("no monitor") {
+                "Can't find a display on the PC — check that a monitor is connected and powered on".to_string()
+            } else {
+                format!("Couldn't start screen capture: {e}")
+            };
+            display::undo(monitor_restore);
+            link.send(&HostMessage::Disconnect { reason: reason.clone() }).await;
+            return Err(e.context(reason));
+        }
+    };
     tracing::info!(width, height, "session capture ready");
     stats.width.store(width, Ordering::Relaxed);
     stats.height.store(height, Ordering::Relaxed);
@@ -433,6 +457,9 @@ pub async fn run(
     let mut capture_streak: u8 = 0;
     // Last `GameArea` sent, so it only goes out when the window moves.
     let mut last_area: Option<(f32, f32, f32, f32)> = None;
+    // Mirrors `capture_ok` (set by the capture thread) so a Notice only goes
+    // out on the transition, not every 100ms poll.
+    let mut capture_was_ok = true;
 
     // A direct path: a session handshaken over WebRTC that's waiting for the
     // device's "use this one" (`pending`), then carrying traffic (`on_direct`).
@@ -588,6 +615,15 @@ pub async fn run(
                 }
             }
             _ = capture_poll.tick() => {
+                let capture_now_ok = capture_ok.load(Ordering::Relaxed);
+                if capture_now_ok != capture_was_ok {
+                    capture_was_ok = capture_now_ok;
+                    link.send(&HostMessage::Notice(if capture_now_ok {
+                        "PC display back — resuming".to_string()
+                    } else {
+                        "Can't find a display on the PC — check that a monitor is connected and powered on. Trying again…".to_string()
+                    })).await;
+                }
                 let now = rc_input::cursor_captured();
                 capture_streak = if now { capture_streak.saturating_add(1) } else { 0 };
                 let next = if captured { now } else { capture_streak >= 2 };
@@ -849,6 +885,7 @@ fn capture_loop(
     enc_rx: &std_mpsc::Receiver<Arc<StdMutex<Arc<StreamEncoder>>>>,
     stop: &AtomicBool,
     gate: &CaptureGate,
+    capture_ok: &AtomicBool,
 ) {
     unsafe {
         let _ = windows::Win32::System::Com::CoInitializeEx(
@@ -883,6 +920,11 @@ fn capture_loop(
     let mut last: Option<Vec<u8>> = None;
     let mut dirty = false;
     let mut last_submit = Instant::now() - Duration::from_secs(1);
+    // ~2 seconds of back-to-back failures (each iteration below sleeps
+    // 100ms on error) before this is treated as "the monitor is gone", not
+    // just a transient mode-change blip — the self-healing recreate() in
+    // rc-capture already absorbs those in well under a second on its own.
+    let mut capture_fail_streak: u32 = 0;
 
     while !stop.load(Ordering::SeqCst) {
         // Picked up on every iteration so a mid-session change (switching to
@@ -912,17 +954,20 @@ fn capture_loop(
         // already queued, so this returns straight away when there's motion.
         match cap.grab(4) {
             Ok(Grab::Frame(f)) => {
+                capture_fail_streak = 0;
                 if !f.mouse_only {
                     last = Some(f.bgra);
                     dirty = true;
                 }
             }
-            Ok(Grab::Timeout) => {}
+            Ok(Grab::Timeout) => capture_fail_streak = 0,
             Err(e) => {
                 tracing::warn!(error = %e, "capture error");
+                capture_fail_streak = capture_fail_streak.saturating_add(1);
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
+        capture_ok.store(capture_fail_streak < 20, Ordering::Relaxed);
 
         // Send every changed frame; when the screen is static, still refresh at
         // ~5 fps so keyframes keep flowing for a late-joining decoder.
