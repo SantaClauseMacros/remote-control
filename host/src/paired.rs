@@ -55,6 +55,26 @@ impl PairedStore {
         self.file.devices.len()
     }
 
+    /// Every remembered device as `(short id, record)`, most recently seen first.
+    pub fn list(&self) -> Vec<(String, PairedDevice)> {
+        let mut out: Vec<_> = self
+            .file
+            .devices
+            .iter()
+            .map(|(k, d)| {
+                let id = data_encoding::BASE64URL_NOPAD
+                    .decode(k.as_bytes())
+                    .ok()
+                    .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                    .map(|key| rc_crypto::DeviceIdentity::key_short_id(&key))
+                    .unwrap_or_else(|| k.clone());
+                (id, d.clone())
+            })
+            .collect();
+        out.sort_by(|a, b| b.1.last_seen.cmp(&a.1.last_seen));
+        out
+    }
+
     pub fn is_paired(&self, key: &[u8; 32]) -> bool {
         self.file.devices.contains_key(&key_str(key))
     }

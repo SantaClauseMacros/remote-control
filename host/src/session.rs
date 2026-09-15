@@ -32,6 +32,22 @@ pub struct SessionParams {
     pub clipboard_sync: bool,
 }
 
+/// Live numbers from a running session, shared with the dashboard. Written by
+/// the session loop, read whenever the dashboard polls — atomics, so neither
+/// side ever waits on the other.
+#[derive(Debug, Default)]
+pub struct LiveStats {
+    pub frames_sent: AtomicU64,
+    pub input_events: AtomicU64,
+    /// Round-trip time in milliseconds × 100.
+    pub rtt_ms_x100: AtomicU32,
+    pub width: AtomicU32,
+    pub height: AtomicU32,
+    pub hardware_encoder: AtomicBool,
+    /// A game currently has the mouse captured.
+    pub game_captured: AtomicBool,
+}
+
 /// Backpressure signals the capture thread checks before handing the encoder
 /// another frame. Both exist because the only thing that reliably keeps a
 /// remote desktop feeling live is *not encoding* what the link can't carry —
@@ -84,6 +100,7 @@ pub async fn run(
     session: LanSession,
     params: SessionParams,
     mut stop: watch::Receiver<bool>,
+    stats: Arc<LiveStats>,
 ) -> Result<()> {
     let session = Arc::new(session);
 
@@ -112,11 +129,14 @@ pub async fn run(
         .recv()
         .context("capture thread exited before reporting geometry")??;
     tracing::info!(width, height, "session capture ready");
+    stats.width.store(width, Ordering::Relaxed);
+    stats.height.store(height, Ordering::Relaxed);
 
     // ── encoder ────────────────────────────────────────────────────────────
     let cfg = quality_config(params.mode, width, height, params.fps, params.max_bitrate_kbps);
     let (pkt_tx, mut pkt_rx) = tokio::sync::mpsc::unbounded_channel();
     let encoder = StreamEncoder::new(cfg, pkt_tx.clone()).context("start encoder")?;
+    stats.hardware_encoder.store(encoder.is_hardware(), Ordering::Relaxed);
     let encoder_slot = Arc::new(StdMutex::new(Arc::new(encoder)));
     enc_tx.send(encoder_slot.clone()).ok();
 
@@ -141,9 +161,8 @@ pub async fn run(
     // again. Drop everything until the next keyframe instead: that's a clean
     // cut between two streams rather than a hole punched in one.
     let resync = Arc::new(AtomicBool::new(false));
-    let frames_sent = Arc::new(AtomicU64::new(0));
     let sv = session.clone();
-    let vc = frames_sent.clone();
+    let vc = stats.clone();
     let nb = gate.clone();
     let rs = resync.clone();
     let video_task = tokio::spawn(async move {
@@ -167,7 +186,7 @@ pub async fn run(
                 tracing::warn!(error = %e, "video send failed");
                 break;
             }
-            vc.fetch_add(1, Ordering::Relaxed);
+            vc.frames_sent.fetch_add(1, Ordering::Relaxed);
         }
         nb.net_busy.store(false, Ordering::Release);
         tracing::debug!("video forwarding task ending");
@@ -231,10 +250,9 @@ pub async fn run(
         h: rect.height as i32,
     });
 
-    let mut input_events: u64 = 0;
     let mut current_mode = params.mode;
-    let mut stats = tokio::time::interval(Duration::from_secs(5));
-    stats.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut stats_tick = tokio::time::interval(Duration::from_secs(5));
+    stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Frequent enough that a client's keyframe request (see the arm below)
     // gets acted on promptly — a slow decoder recovery is as bad as not
     // recovering at all — and to keep the congestion check responsive.
@@ -253,6 +271,7 @@ pub async fn run(
         let cfg = quality_config(mode, width, height, params.fps, params.max_bitrate_kbps);
         match StreamEncoder::new(cfg, pkt_tx.clone()) {
             Ok(new_encoder) => {
+                stats.hardware_encoder.store(new_encoder.is_hardware(), Ordering::Relaxed);
                 // Set before the swap: the outgoing encoder drains into the
                 // shared channel as it's dropped, and none of that belongs to
                 // the stream the client is about to follow. See `resync`.
@@ -285,7 +304,9 @@ pub async fn run(
             r = session.control().recv() => match r {
                 Ok(bytes) => {
                     match handle_client_msg(&bytes, &mut injector, clipboard.as_ref(), &session).await {
-                        ClientAction::Input => input_events += 1,
+                        ClientAction::Input => {
+                            stats.input_events.fetch_add(1, Ordering::Relaxed);
+                        }
                         ClientAction::SetQuality(mode) => {
                             current_mode = mode;
                             if let Some(cfg) = recreate_encoder(mode) {
@@ -317,6 +338,7 @@ pub async fn run(
                 // and nothing to see beyond a lower frame rate while a link
                 // is struggling.
                 let rtt = session.video().feedback().rtt_ms;
+                stats.rtt_ms_x100.store((rtt * 100.0) as u32, Ordering::Relaxed);
                 if rtt > 0.0 {
                     rtt_floor = if rtt_floor == 0.0 || rtt < rtt_floor {
                         rtt
@@ -359,6 +381,7 @@ pub async fn run(
                 if next != captured {
                     captured = next;
                     injector.set_captured(captured);
+                    stats.game_captured.store(captured, Ordering::Relaxed);
                     tracing::debug!(captured, "cursor capture changed");
                     let _ = session
                         .control()
@@ -393,10 +416,10 @@ pub async fn run(
                     }
                 }
             }
-            _ = stats.tick() => {
+            _ = stats_tick.tick() => {
                 tracing::info!(
-                    frames_sent = frames_sent.load(Ordering::Relaxed),
-                    input_events,
+                    frames_sent = stats.frames_sent.load(Ordering::Relaxed),
+                    input_events = stats.input_events.load(Ordering::Relaxed),
                     rtt_ms = session.video().feedback().rtt_ms,
                     "session stats"
                 );

@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote Control</title>
+<link rel="icon" href="/favicon.svg">
+<style>
+:root {
+  --bg: #0b0d10; --panel: #101318; --surface: #161a20; --surface-2: #1d222a; --line: #262c35;
+  --text: #eef1f5; --dim: #8b93a1; --accent: #4c8dff; --ok: #35d07f; --warn: #f5b545; --danger: #ff5a5f;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+body { display: flex; overflow: hidden; }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.dim { color: var(--dim); }
+.small { font-size: 12px; }
+h1 { font-size: 24px; margin: 0; letter-spacing: -0.02em; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+
+/* ── sidebar ── */
+.side { width: 220px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; padding: 18px 12px; gap: 2px; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
+.brand .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #4c8dff, #7a5cff);
+  display: grid; place-items: center; }
+.brand b { display: block; font-size: 15px; }
+.side a { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; color: var(--dim); }
+.side a:hover { background: var(--surface); color: var(--text); text-decoration: none; }
+.side a.on { background: var(--surface-2); color: var(--text); }
+.side a svg { width: 18px; height: 18px; flex: none; }
+.side-foot { margin-top: auto; padding: 8px; }
+
+/* ── content ── */
+main { flex: 1; overflow-y: auto; padding: 28px 32px 40px; }
+.page { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.card-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin-bottom: 12px; }
+.span-2 { grid-column: 1 / -1; }
+
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+.pill.ok::before { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.pill.live::before { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.pill.warn::before { background: var(--warn); }
+.pill.off::before { background: var(--danger); }
+
+.btn { border: 1px solid var(--line); background: var(--surface-2); border-radius: 10px; padding: 8px 14px;
+  font-weight: 600; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: #3a414c; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { background: transparent; }
+.btn.sm { padding: 5px 10px; font-size: 12px; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+/* ── home ── */
+.hero { display: flex; gap: 24px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.hero-main { flex: 1; min-width: 280px; display: flex; flex-direction: column; gap: 12px; }
+.pcid { font: 600 30px/1.2 "Cascadia Mono", Consolas, monospace; letter-spacing: .04em; user-select: all; }
+.qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.qr-wrap img { width: 168px; height: 168px; border-radius: 12px; background: #fff; padding: 8px; }
+.qr-empty { width: 168px; height: 168px; border-radius: 12px; border: 1px dashed var(--line);
+  display: grid; place-items: center; text-align: center; padding: 16px; }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px;
+  border-radius: var(--radius); background: rgba(76,141,255,.12); border: 1px solid rgba(76,141,255,.35); }
+.banner.warn { background: rgba(245,181,69,.1); border-color: rgba(245,181,69,.35); }
+
+.idle { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 14px 8px; }
+.idle svg { width: 40px; height: 40px; color: var(--dim); }
+.peer { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.peer .who { flex: 1; min-width: 0; }
+.peer .who b { font-family: "Cascadia Mono", Consolas, monospace; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.stats div { background: var(--surface-2); border-radius: 10px; padding: 10px; text-align: center; }
+.stats span { display: block; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stats label { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+.chip.warn { color: var(--warn); border-color: rgba(245,181,69,.4); }
+
+.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.checks li { display: flex; gap: 10px; align-items: flex-start; }
+.checks .ic { width: 20px; height: 20px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 12px; font-weight: 700; margin-top: 1px; }
+.checks .ic.ok { background: rgba(53,208,127,.15); color: var(--ok); }
+.checks .ic.warn { background: rgba(245,181,69,.15); color: var(--warn); }
+.checks .ic.info { background: rgba(76,141,255,.15); color: var(--accent); }
+.checks .body { flex: 1; }
+.checks .body .btn { margin-top: 6px; }
+
+/* ── settings rows ── */
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
+/* Divider between consecutive rows, whatever element each row is (div or label). */
+.set-row + .set-row { border-top: 1px solid var(--line); }
+.set-row .txt { flex: 1; min-width: 0; }
+.set-row .txt b { display: block; font-weight: 600; }
+.set-row input[type=text], .set-row select { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 220px; }
+.set-row input[type=text]:focus, .set-row select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.switch { appearance: none; width: 42px; height: 24px; border-radius: 999px; background: #3a414c; position: relative; cursor: pointer; flex: none; transition: background .15s; margin: 0; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.switch:checked { background: var(--accent); }
+.switch:checked::after { transform: translateX(18px); }
+details summary { cursor: pointer; color: var(--dim); padding: 6px 0; }
+
+/* ── lists ── */
+.list { display: flex; flex-direction: column; }
+.item { display: flex; align-items: center; gap: 14px; padding: 12px 2px; border-top: 1px solid var(--line); }
+.item:first-child { border-top: 0; }
+.item .ic { width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; flex: none; }
+.item .ic svg { width: 18px; height: 18px; }
+.item .txt { flex: 1; min-width: 0; }
+.item .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+.empty { text-align: center; padding: 26px 10px; color: var(--dim); }
+.ev-connect .ic { color: var(--ok); }
+.ev-disconnect .ic { color: var(--dim); }
+.ev-warn .ic { color: var(--warn); }
+.ev-start .ic, .ev-update .ic { color: var(--accent); }
+
+.steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+kbd { font: 12px "Cascadia Mono", Consolas, monospace; background: var(--surface-2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; }
+
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222831; border: 1px solid var(--line);
+  padding: 9px 16px; border-radius: 999px; font-weight: 600; box-shadow: 0 10px 30px rgba(0,0,0,.4); z-index: 10; }
+dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 22px; width: min(92vw, 420px); }
+dialog::backdrop { background: rgba(0,0,0,.55); }
+dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0 0; padding: 0; }
+
+@media (max-width: 760px) {
+  .side { width: 64px; padding: 14px 8px; }
+  .side a span, .brand div:last-child, .side-foot { display: none; }
+  main { padding: 20px 16px 32px; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .set-row { flex-wrap: wrap; }
+  .set-row input[type=text], .set-row select { min-width: 0; width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<nav class="side">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="15" height="11" rx="2"/><path d="M6 19h7M9.5 15v4"/><rect x="16" y="9" width="6" height="11" rx="1.5"/></svg></div>
+    <div><b>Remote Control</b><span class="dim small" id="side-ver"></span></div>
+  </div>
+  <a href="#home" data-page="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg><span>Home</span></a>
+  <a href="#devices" data-page="devices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg><span>Devices</span></a>
+  <a href="#activity" data-page="activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>Activity</span></a>
+  <a href="#settings" data-page="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a>
+  <a href="#help" data-page="help"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg><span>Help</span></a>
+  <a href="#about" data-page="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg><span>About</span></a>
+  <div class="side-foot"><span class="pill" id="side-pill">Starting…</span></div>
+</nav>
+
+<main>
+  <!-- ═════════════ HOME ═════════════ -->
+  <section class="page" id="page-home">
+    <div class="page-head">
+      <div><h1 id="pc-name">This PC</h1><div class="dim" id="state-text">Starting…</div></div>
+      <span class="pill" id="state-pill">Starting…</span>
+    </div>
+
+    <div class="banner" id="banner-update" hidden>
+      <div><b>Update available — <span id="upd-ver"></span></b><div class="dim small" id="upd-notes"></div></div>
+      <button class="btn primary" id="btn-update">Download</button>
+    </div>
+    <div class="banner warn" id="banner-off" hidden>
+      <div><b>Remote access is off</b><div class="dim small">No device can connect until you turn it back on.</div></div>
+      <button class="btn primary" id="btn-turn-on">Turn on</button>
+    </div>
+
+    <div class="card hero">
+      <div class="hero-main">
+        <div class="card-title" style="margin:0">Your PC ID</div>
+        <div class="pcid" id="pc-id">—</div>
+        <div class="row">
+          <button class="btn primary" id="btn-copy-id">Copy PC ID</button>
+          <button class="btn" id="btn-copy-link">Copy phone link</button>
+          <button class="btn ghost" id="btn-open-web">Open phone app ↗</button>
+        </div>
+        <div class="dim small">Treat your PC ID like a password — anyone who has it can control this PC.</div>
+      </div>
+      <div class="qr-wrap">
+        <img id="qr" alt="QR code linking to this PC" hidden>
+        <div class="qr-empty dim small" id="qr-empty">No relay configured, so there's no phone link</div>
+        <div class="dim small">Scan with your phone's camera</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">Connection</div>
+        <div class="idle" id="session-idle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>
+          <b>Waiting for a device</b>
+          <div class="dim small">Scan the QR code with your phone, or open the phone link, then tap Connect.</div>
+        </div>
+        <div id="session-live" hidden>
+          <div class="peer">
+            <span class="pill live">Connected</span>
+            <div class="who"><b id="peer-id"></b><div class="dim small" id="peer-route"></div></div>
+            <button class="btn danger sm" id="btn-disconnect">Disconnect</button>
+          </div>
+          <div class="stats">
+            <div><span id="st-fps">–</span><label>FPS</label></div>
+            <div><span id="st-rtt">–</span><label>Ping</label></div>
+            <div><span id="st-res">–</span><label>Screen</label></div>
+            <div><span id="st-time">–</span><label>Time</label></div>
+          </div>
+          <div class="chips">
+            <span class="chip" id="chip-enc"></span>
+            <span class="chip" id="chip-game" hidden>🎮 A game has the mouse</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Quick settings</div>
+        <label class="set-row"><div class="txt"><b>Remote access</b><span class="dim small">Allow devices to connect to this PC</span></div><input type="checkbox" class="switch" data-setting="enableRemoteAccess"></label>
+        <label class="set-row"><div class="txt"><b>Start with Windows</b><span class="dim small">So you can connect after the PC restarts</span></div><input type="checkbox" class="switch" data-setting="startWithWindows"></label>
+        <label class="set-row"><div class="txt"><b>Clipboard sync</b><span class="dim small">Share copied text with the connected device</span></div><input type="checkbox" class="switch" data-setting="clipboardSync"></label>
+      </div>
+
+      <div class="card span-2">
+        <div class="card-title">Health check</div>
+        <ul class="checks" id="checks"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ DEVICES ═════════════ -->
+  <section class="page" id="page-devices" hidden>
+    <div class="page-head">
+      <div><h1>Devices</h1><div class="dim">Phones and computers that have connected to this PC.</div></div>
+      <button class="btn danger" id="btn-forget">Clear list</button>
+    </div>
+    <div class="card"><div class="list" id="device-list"></div></div>
+    <div class="card">
+      <h2>Want to lock everyone out?</h2>
+      <p class="dim" style="margin:0 0 10px">Devices connect with your PC ID, so clearing this list doesn't block anyone. To get a brand-new PC ID:</p>
+      <ol class="steps dim">
+        <li>Click <b>Exit Remote Control</b> below.</li>
+        <li>Delete the folder <kbd>%LOCALAPPDATA%\RemoteControl</kbd>.</li>
+        <li>Start Remote Control again from the Start menu, and add the new ID on your own devices.</li>
+      </ol>
+      <div class="row" style="margin-top:12px"><button class="btn" id="btn-exit">Exit Remote Control</button></div>
+    </div>
+  </section>
+
+  <!-- ═════════════ ACTIVITY ═════════════ -->
+  <section class="page" id="page-activity" hidden>
+    <div class="page-head">
+      <div><h1>Activity</h1><div class="dim">Recent connections and events on this PC.</div></div>
+      <button class="btn" id="btn-refresh-activity">Refresh</button>
+    </div>
+    <div class="card"><div class="list" id="activity-list"></div></div>
+  </section>
+
+  <!-- ═════════════ SETTINGS ═════════════ -->
+  <section class="page" id="page-settings" hidden>
+    <div class="page-head"><div><h1>Settings</h1><div class="dim">Changes save automatically.</div></div></div>
+
+    <div class="card">
+      <h2>General</h2>
+      <div class="set-row"><div class="txt"><b>PC name</b><span class="dim small">Shown to devices on your local network</span></div><input type="text" maxlength="40" data-setting="computerName"></div>
+      <label class="set-row"><div class="txt"><b>Remote access</b><span class="dim small">Allow devices to connect to this PC</span></div><input type="checkbox" class="switch" data-setting="enableRemoteAccess"></label>
+      <label class="set-row"><div class="txt"><b>Start with Windows</b><span class="dim small">Starts quietly in the tray when you sign in</span></div><input type="checkbox" class="switch" data-setting="startWithWindows"></label>
+    </div>
+
+    <div class="card">
+      <h2>Video</h2>
+      <div class="set-row"><div class="txt"><b>Quality</b><span class="dim small">What a new connection starts at — it can be changed from the device too</span></div>
+        <select data-setting="quality"><option value="low">Low — smoothest</option><option value="balanced">Balanced</option><option value="high">High — sharpest</option><option value="auto">Auto</option></select></div>
+      <div class="set-row"><div class="txt"><b>Frame rate limit</b><span class="dim small">Higher feels smoother in games; lower saves bandwidth</span></div>
+        <select data-setting="maxFps"><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="90">90 FPS</option><option value="120">120 FPS</option></select></div>
+      <div class="set-row"><div class="txt"><b>Bitrate limit</b><span class="dim small">Cap how much upload the stream can use</span></div>
+        <select data-setting="maxBitrateKbps"><option value="0">No limit</option><option value="3000">3 Mbps</option><option value="5000">5 Mbps</option><option value="8000">8 Mbps</option><option value="15000">15 Mbps</option><option value="25000">25 Mbps</option></select></div>
+      <div class="dim small" style="margin-top:6px">Video changes apply to the next connection.</div>
+    </div>
+
+    <div class="card">
+      <h2>Features</h2>
+      <label class="set-row"><div class="txt"><b>Clipboard sync</b><span class="dim small">Share copied text both ways while connected</span></div><input type="checkbox" class="switch" data-setting="clipboardSync"></label>
+      <label class="set-row"><div class="txt"><b>Show on local network</b><span class="dim small">Lets the desktop viewer find this PC by name</span></div><input type="checkbox" class="switch" data-setting="lanDiscovery"></label>
+      <label class="set-row"><div class="txt"><b>Check for updates</b><span class="dim small">Get a notification when a new version is out</span></div><input type="checkbox" class="switch" data-setting="updateChecks"></label>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary>Advanced — relay server</summary>
+        <div class="set-row"><div class="txt"><b>Relay address</b><span class="dim small">Lets devices reach this PC from any network. Leave empty for local network only.</span></div><input type="text" data-setting="relayUrl" spellcheck="false"></div>
+        <div class="set-row"><div class="txt"><b>Relay access key</b><span class="dim small">Only if your relay requires one</span></div><input type="text" data-setting="relayKey" spellcheck="false"></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Tools</h2>
+      <div class="row">
+        <button class="btn" data-action="copyDiagnostics">Copy diagnostic info</button>
+        <button class="btn" data-action="openLogs">Open log folder</button>
+        <button class="btn" data-action="editConfig">Edit config file</button>
+        <button class="btn" data-action="restartAdmin" id="btn-admin">Restart as Administrator</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ HELP ═════════════ -->
+  <section class="page" id="page-help" hidden>
+    <div class="page-head"><div><h1>Help</h1><div class="dim">Everything you need to get connected and playing.</div></div></div>
+    <div class="grid">
+      <div class="card">
+        <h2>Connect from your phone</h2>
+        <ol class="steps">
+          <li>On <b>Home</b>, scan the QR code with your phone's camera — or click <b>Copy phone link</b> and send it to yourself.</li>
+          <li>Open the link, name the PC and tap <b>Save</b>, then <b>Connect</b>.</li>
+          <li>Tip: <b>Add to Home Screen</b> so it opens like an app.</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h2>Touch controls</h2>
+        <ul class="steps">
+          <li><b>Drag</b> to move the pointer · <b>tap</b> to click</li>
+          <li><b>Hold, then drag</b> to click and drag</li>
+          <li><b>Two-finger tap</b> to right-click · <b>two-finger drag</b> to scroll</li>
+          <li><b>Pinch</b> to zoom · <b>⋯</b> for the keyboard and more keys</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>🎮 Minecraft mode</h2>
+        <ul class="steps">
+          <li>Tap <b>🕹</b> in the top-left of the phone app</li>
+          <li><b>Tap anywhere</b> to hit, <b>hold</b> to mine, <b>drag</b> to look</li>
+          <li>Tap a slot <b>on Minecraft's hotbar</b> to switch items</li>
+          <li><b>Inv</b> is left of the hotbar, <b>Drop</b> is right of it</li>
+          <li><b>Sprint</b> (Shift) and <b>Crouch</b> (Ctrl) toggle on and off</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>Fixes for common problems</h2>
+        <ul class="steps">
+          <li><b>Can't click Task Manager or admin prompts?</b> Use <b>Restart as Administrator</b> in Settings → Tools.</li>
+          <li><b>Laggy?</b> Lower the quality on the device (<b>⋯ → Quality → Low</b>). Wired internet on the PC helps most.</li>
+          <li><b>Slow encoder warning?</b> Close Parsec, OBS or ShadowPlay — they can take over the graphics card's video encoder.</li>
+          <li><b>Black screen?</b> Windows blocks capture on the lock screen — sign in on the PC.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card row" style="justify-content:space-between">
+      <div><b>Still stuck?</b> <span class="dim">Read the full guide or report a problem on GitHub.</span></div>
+      <div class="row">
+        <button class="btn" data-open="https://github.com/SantaClauseMacros/remote-control#readme">Full guide ↗</button>
+        <button class="btn" data-open="https://github.com/SantaClauseMacros/remote-control/issues">Report a problem ↗</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ ABOUT ═════════════ -->
+  <section class="page" id="page-about" hidden>
+    <div class="page-head"><div><h1>About</h1></div></div>
+    <div class="card">
+      <div class="set-row"><div class="txt"><b>Version</b></div><span id="about-ver">—</span></div>
+      <div class="set-row"><div class="txt"><b>Updates</b></div><span id="about-update" class="dim">—</span></div>
+      <div class="set-row"><div class="txt"><b>Running as Administrator</b></div><span id="about-admin">—</span></div>
+      <div class="set-row"><div class="txt"><b>Local network port</b></div><span id="about-port">—</span></div>
+    </div>
+    <div class="card">
+      <p style="margin-top:0">Remote Control lets you use this PC from your phone, Chromebook or another computer. Everything between your devices is end-to-end encrypted — the relay in the middle only ever sees scrambled data.</p>
+      <div class="row">
+        <button class="btn" data-open="https://github.com/SantaClauseMacros/remote-control">GitHub ↗</button>
+        <button class="btn" data-open="https://github.com/SantaClauseMacros/remote-control/releases">All releases ↗</button>
+      </div>
+      <p class="dim small" style="margin-bottom:0">Free and open source, licensed under MIT or Apache-2.0.</p>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+<dialog id="confirm">
+  <h2 id="confirm-title"></h2>
+  <div class="dim" id="confirm-body"></div>
+  <menu>
+    <button class="btn" value="cancel" id="confirm-no">Cancel</button>
+    <button class="btn danger solid" value="ok" id="confirm-yes">OK</button>
+  </menu>
+</dialog>
+
+<script>
+'use strict';
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'X-RC-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.text()) || res.statusText);
+  return res.json();
+}
+
+let toastTimer = 0;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 2200);
+}
+
+function confirmBox(title, body, okLabel) {
+  return new Promise(resolve => {
+    const d = $('#confirm');
+    $('#confirm-title').textContent = title;
+    $('#confirm-body').textContent = body;
+    $('#confirm-yes').textContent = okLabel || 'OK';
+    const done = v => { d.close(); resolve(v); };
+    $('#confirm-yes').onclick = () => done(true);
+    $('#confirm-no').onclick = () => done(false);
+    d.oncancel = () => resolve(false);
+    d.showModal();
+  });
+}
+
+async function copyText(text, what) {
+  try { await navigator.clipboard.writeText(text); toast(`${what} copied`); }
+  catch { toast("Couldn't copy — select it and press Ctrl+C"); }
+}
+
+const ago = unix => {
+  if (!unix) return 'never';
+  const s = Math.max(0, Date.now() / 1000 - unix);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return new Date(unix * 1000).toLocaleDateString();
+};
+const duration = s => {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+};
+
+/* ── navigation ── */
+const PAGES = ['home', 'devices', 'activity', 'settings', 'help', 'about'];
+function route() {
+  const page = PAGES.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home';
+  for (const p of PAGES) $('#page-' + p).hidden = p !== page;
+  $$('.side a').forEach(a => a.classList.toggle('on', a.dataset.page === page));
+  if (page === 'devices') loadDevices();
+  if (page === 'activity') loadActivity();
+  if (page === 'settings') loadSettings();
+}
+addEventListener('hashchange', route);
+
+/* ── status ── */
+let status = null, qrFor = null, lastFrames = null;
+const STATE = {
+  starting: ['Starting…', 'Getting ready', ''],
+  listening: ['Ready', 'Waiting for a device to connect', 'ok'],
+  connected: ['Connected', 'A device is using this PC right now', 'live'],
+  disabled: ['Remote access off', 'No device can connect', 'off'],
+  idle: ['Not listening', "Remote access is on, but the PC isn't listening", 'warn'],
+};
+
+async function pollStatus() {
+  try {
+    status = await api('/api/status');
+    renderStatus();
+  } catch (e) {
+    for (const el of [$('#state-pill'), $('#side-pill')]) { el.className = 'pill off'; el.textContent = 'App not running'; }
+    $('#state-text').textContent = 'Remote Control has stopped. Start it again from the Start menu.';
+  }
+}
+
+function renderStatus() {
+  const s = status;
+  const [label, text, cls] = STATE[s.state] || STATE.starting;
+  let pillLabel = label, pillCls = cls;
+  if (s.state === 'listening' && s.relayEnabled && !s.relayConnected) { pillLabel = 'Local network only'; pillCls = 'warn'; }
+  for (const el of [$('#state-pill'), $('#side-pill')]) { el.className = 'pill ' + pillCls; el.textContent = pillLabel; }
+  $('#state-text').textContent = text;
+  $('#pc-name').textContent = s.computerName || 'This PC';
+  $('#pc-id').textContent = s.deviceId || '—';
+  $('#side-ver').textContent = 'v' + s.version;
+  $('#about-ver').textContent = 'v' + s.version;
+  $('#about-admin').textContent = s.elevated ? 'Yes' : 'No';
+  $('#about-port').textContent = s.listenPort || '—';
+  $('#btn-admin').hidden = s.elevated;
+  document.title = s.state === 'connected' ? 'Remote Control — Connected' : 'Remote Control';
+
+  // phone link + QR
+  $('#btn-copy-link').disabled = !s.phoneLink;
+  $('#btn-open-web').disabled = !s.webApp;
+  if (s.phoneLink && qrFor !== s.phoneLink) {
+    qrFor = s.phoneLink;
+    $('#qr').src = '/api/qr.svg?t=' + encodeURIComponent(TOKEN) + '&v=' + encodeURIComponent(s.phoneLink);
+  }
+  $('#qr').hidden = !s.phoneLink;
+  $('#qr-empty').hidden = !!s.phoneLink;
+
+  // banners
+  $('#banner-off').hidden = s.state !== 'disabled';
+  $('#banner-update').hidden = !s.update;
+  if (s.update) {
+    $('#upd-ver').textContent = 'v' + s.update.version;
+    $('#upd-notes').textContent = s.update.notes || '';
+    $('#about-update').textContent = `v${s.update.version} available`;
+  } else {
+    $('#about-update').textContent = s.updateChecks ? "You're up to date" : 'Update checks are off';
+  }
+
+  // session
+  const live = s.session;
+  $('#session-idle').hidden = !!live;
+  $('#session-live').hidden = !live;
+  if (live) {
+    $('#peer-id').textContent = live.keyId;
+    $('#peer-route').textContent = live.route === 'via relay' ? 'Connected through the relay' : `On your local network (${live.route})`;
+    const now = performance.now();
+    if (lastFrames && lastFrames.since === live.since) {
+      const fps = (live.framesSent - lastFrames.frames) / ((now - lastFrames.t) / 1000);
+      if (isFinite(fps) && fps >= 0) $('#st-fps').textContent = Math.round(fps);
+    } else {
+      $('#st-fps').textContent = '–';
+    }
+    lastFrames = { frames: live.framesSent, t: now, since: live.since };
+    $('#st-rtt').textContent = live.rttMs > 0 ? `${Math.round(live.rttMs)} ms` : '–';
+    $('#st-res').textContent = live.width ? `${live.width}×${live.height}` : '–';
+    $('#st-time').textContent = duration(Date.now() / 1000 - live.since);
+    const enc = $('#chip-enc');
+    enc.textContent = live.hardwareEncoder ? '⚡ Graphics card encoding' : '⚠ Slower CPU encoding';
+    enc.className = 'chip' + (live.hardwareEncoder ? '' : ' warn');
+    enc.title = live.hardwareEncoder ? '' : 'Your graphics card encoder is busy or unavailable. Closing Parsec, OBS or ShadowPlay usually frees it.';
+    $('#chip-game').hidden = !live.gameCaptured;
+  } else {
+    lastFrames = null;
+  }
+
+  renderChecks();
+  syncQuickSwitches();
+}
+
+function renderChecks() {
+  const s = status, items = [];
+  const add = (kind, title, detail, btn) => items.push({ kind, title, detail, btn });
+  if (s.state === 'disabled') add('warn', 'Remote access is off', 'Turn it on so your devices can connect.', ['Turn on', () => saveSetting('enableRemoteAccess', true)]);
+  if (!s.relayEnabled) add('warn', 'Local network only', 'No relay is set, so only devices on the same Wi-Fi can connect. Set one in Settings → Advanced.');
+  else if (s.relayConnected) add('ok', 'Reachable from anywhere', 'Connected to the relay — your devices can reach this PC from any network.');
+  else add('warn', "Can't reach the relay right now", 'Check this PC\'s internet connection. It keeps retrying on its own.');
+  if (s.autostart) add('ok', 'Starts with Windows', "You'll still be able to connect after a restart.");
+  else add('warn', "Doesn't start with Windows", "If the PC restarts, you won't be able to connect until someone opens Remote Control.", ['Turn on', () => saveSetting('startWithWindows', true)]);
+  if (s.session && !s.session.hardwareEncoder) add('warn', 'Using slower CPU video encoding', 'Your graphics card encoder is busy or unavailable. Closing Parsec, OBS or ShadowPlay usually frees it.');
+  if (s.elevated) add('ok', 'Running as Administrator', 'You can control Task Manager and admin prompts.');
+  else add('info', 'Admin windows need Administrator', "Task Manager and admin prompts ignore remote clicks unless Remote Control runs as Administrator.", ['Restart as Administrator', () => action('restartAdmin')]);
+  const ul = $('#checks');
+  ul.textContent = '';
+  for (const it of items) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="ic ${it.kind}">${it.kind === 'ok' ? '✓' : it.kind === 'warn' ? '!' : 'i'}</span><div class="body"><b></b><div class="dim small"></div></div>`;
+    li.querySelector('b').textContent = it.title;
+    li.querySelector('.dim').textContent = it.detail;
+    if (it.btn) {
+      const b = document.createElement('button');
+      b.className = 'btn sm'; b.textContent = it.btn[0]; b.onclick = it.btn[1];
+      li.querySelector('.body').appendChild(b);
+    }
+    ul.appendChild(li);
+  }
+}
+
+/* ── settings ── */
+let settings = null, saveTimers = {};
+async function loadSettings() {
+  try { settings = await api('/api/settings'); fillSettings(); } catch (e) { toast('Could not load settings'); }
+}
+function fillSettings() {
+  for (const el of $$('[data-setting]')) {
+    if (document.activeElement === el) continue;
+    const v = settings[el.dataset.setting];
+    if (el.type === 'checkbox') el.checked = !!v;
+    else el.value = v == null ? '' : String(v);
+  }
+  $$('[data-setting="updateChecks"]').forEach(el => { el.disabled = !settings.updateChecksAvailable; });
+}
+function syncQuickSwitches() {
+  if (!settings) return;
+  settings.enableRemoteAccess = status.state !== 'disabled';
+  settings.startWithWindows = status.autostart;
+  fillSettings();
+}
+async function saveSetting(key, value) {
+  try {
+    settings = await api('/api/settings', { [key]: value });
+    fillSettings();
+    toast('Saved');
+    pollStatus();
+  } catch (e) {
+    toast('Could not save: ' + e.message);
+    loadSettings();
+  }
+}
+document.addEventListener('change', e => {
+  const el = e.target.closest('[data-setting]');
+  if (!el) return;
+  let v = el.type === 'checkbox' ? el.checked : el.value;
+  if (['maxFps', 'maxBitrateKbps'].includes(el.dataset.setting)) v = Number(v);
+  if (el.type === 'text') v = v.trim();
+  clearTimeout(saveTimers[el.dataset.setting]);
+  saveSetting(el.dataset.setting, v);
+});
+
+/* ── devices / activity ── */
+const PHONE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>';
+async function loadDevices() {
+  const list = $('#device-list');
+  try {
+    const devices = await api('/api/devices');
+    list.textContent = '';
+    $('#btn-forget').disabled = !devices.length;
+    if (!devices.length) { list.innerHTML = '<div class="empty">No devices have connected yet.</div>'; return; }
+    for (const d of devices) {
+      const row = document.createElement('div');
+      row.className = 'item';
+      row.innerHTML = `<div class="ic">${PHONE_ICON}</div><div class="txt"><div class="mono"></div><div class="dim small"></div></div>`;
+      row.querySelector('.mono').textContent = d.id;
+      row.querySelector('.dim').textContent = `Last connected ${ago(d.lastSeen)} · first seen ${ago(d.added)}`;
+      list.appendChild(row);
+    }
+  } catch { list.innerHTML = '<div class="empty">Could not load devices.</div>'; }
+}
+
+const EV_ICON = {
+  connect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>',
+  disconnect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
+  start: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4z"/></svg>',
+  update: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>',
+};
+async function loadActivity() {
+  const list = $('#activity-list');
+  try {
+    const events = await api('/api/activity');
+    list.textContent = '';
+    if (!events.length) { list.innerHTML = '<div class="empty">Nothing yet today.</div>'; return; }
+    for (const ev of events) {
+      const row = document.createElement('div');
+      row.className = 'item ev-' + ev.kind;
+      row.innerHTML = `<div class="ic">${EV_ICON[ev.kind] || EV_ICON.start}</div><div class="txt"><div></div><div class="dim small"></div></div>`;
+      row.querySelector('.txt div').textContent = ev.text;
+      const when = new Date(ev.time);
+      row.querySelector('.dim').textContent = isNaN(when) ? '' : when.toLocaleString();
+      list.appendChild(row);
+    }
+  } catch { list.innerHTML = '<div class="empty">Could not load activity.</div>'; }
+}
+
+/* ── actions ── */
+async function action(name) {
+  if (name === 'restartAdmin' && !await confirmBox('Restart as Administrator?', 'Windows will ask for permission. Any connected device will be disconnected for a few seconds.', 'Restart')) return;
+  if (name === 'exit' && !await confirmBox('Exit Remote Control?', "Nobody will be able to connect to this PC until it's started again.", 'Exit')) return;
+  try {
+    const r = await api('/api/action', { action: name });
+    if (r.message) toast(r.message);
+  } catch (e) { toast('Failed: ' + e.message); }
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('[data-action]');
+  if (a) action(a.dataset.action);
+  const o = e.target.closest('[data-open]');
+  if (o) window.open(o.dataset.open, '_blank');
+});
+
+$('#btn-copy-id').onclick = () => status && copyText(status.deviceId, 'PC ID');
+$('#btn-copy-link').onclick = () => status && status.phoneLink && copyText(status.phoneLink, 'Phone link');
+$('#btn-open-web').onclick = () => status && status.webApp && window.open(status.webApp, '_blank');
+$('#btn-update').onclick = () => status && status.update && window.open(status.update.url, '_blank');
+$('#btn-turn-on').onclick = () => saveSetting('enableRemoteAccess', true);
+$('#btn-disconnect').onclick = async () => {
+  if (await confirmBox('Disconnect this device?', 'It can reconnect any time using your PC ID.', 'Disconnect')) action('disconnect');
+};
+$('#btn-forget').onclick = async () => {
+  if (await confirmBox('Clear the device list?', "This only clears the history — devices can still connect with your PC ID.", 'Clear')) {
+    await action('forgetDevices');
+    loadDevices();
+  }
+};
+$('#btn-exit').onclick = () => action('exit');
+$('#btn-refresh-activity').onclick = loadActivity;
+
+loadSettings();
+route();
+pollStatus();
+setInterval(pollStatus, 1000);
+</script>
+</body>
+</html>

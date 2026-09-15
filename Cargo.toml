@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
@@ -48,6 +48,8 @@ ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "tls12"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+tiny_http = "0.12"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [workspace.dependencies.windows]
 version = "0.58"

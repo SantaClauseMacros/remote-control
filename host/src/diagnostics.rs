@@ -70,7 +70,7 @@ pub fn build_report(paths: &AppPaths, status: &CoreStatus) -> String {
 }
 
 /// The last `max_bytes` of `s`, cut on a char boundary (never mid-UTF8).
-fn tail_str(s: &str, max_bytes: usize) -> &str {
+pub(crate) fn tail_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }

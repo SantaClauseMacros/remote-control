@@ -91,7 +91,7 @@ pub struct SecuritySettings {
 pub struct UpdateSettings {
     /// Check this URL for a version manifest (`{"version","url","notes"}` JSON).
     /// Release builds default it to the GitHub release's `latest.json`, baked
-    /// in at build time via `RC_UPDATE_URL`. A build without that — or `None`
+    /// in at build time via `RC_UPDATE_URL`. A build without that — or `""`
     /// here — makes no update calls at all.
     pub check_url: Option<String>,
     /// How often to check, in hours. Ignored while `check_url` is `None`.

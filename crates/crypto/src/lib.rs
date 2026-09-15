@@ -114,6 +114,15 @@ pub fn x25519_public_from_secret(secret: &[u8; 32]) -> [u8; 32] {
     XPublicKey::from(&XStaticSecret::from(*secret)).to_bytes()
 }
 
+/// A random lowercase-hex token from `n_bytes` of OS randomness — for local
+/// secrets such as the dashboard's per-launch access token.
+pub fn random_token_hex(n_bytes: usize) -> String {
+    use rand::RngCore;
+    let mut bytes = vec![0u8; n_bytes];
+    OsRng.fill_bytes(&mut bytes);
+    data_encoding::HEXLOWER.encode(&bytes)
+}
+
 /// Six-digit numeric pairing code shown on the host and typed into the client.
 pub fn random_pairing_code() -> String {
     use rand::Rng;

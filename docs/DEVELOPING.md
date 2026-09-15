@@ -15,7 +15,7 @@
 | `crates/input` | `SendInput` injection, per-monitor-V2 DPI, cursor-capture detection |
 | `crates/clipboard` | Clipboard text get/set + change watcher |
 | `crates/discovery` | mDNS advertise/browse (`_remotecontrol._tcp`) |
-| `host` | Windows tray host: session loop, settings, autostart, relay parker, update checker |
+| `host` | Windows tray host and app window (`host/src/dashboard`): session loop, settings, autostart, relay parker, update checker |
 | `desktop-client` | Windows viewer/controller (LAN + relay) |
 | `server` | `rc-relay` — self-hostable rendezvous relay (ciphertext only) |
 | `cf-worker` | Cloudflare Worker: the same relay protocol over WebSocket, and it serves `web/` |
@@ -40,6 +40,16 @@ cargo test -p rc-host -p rc-crypto -p rc-input
 ```
 
 Run with `--console` to force a log console in any build; set `RC_LOG=rc_host=trace` for verbose logging.
+
+### The app window
+
+The tray host serves a small dashboard on `127.0.0.1` (random port, per-launch token) and opens it as a Microsoft Edge app window. The page is a single file, `host/src/dashboard/ui.html`, compiled into the binary; the JSON API behind it is in `host/src/dashboard/mod.rs`.
+
+```bash
+cargo run -p rc-host -- --dashboard-preview
+```
+
+serves the window with made-up data and a throwaway config folder, and prints its URL. It runs alongside an installed host without touching it, the registry, or real settings.
 
 ### Build-time settings
 

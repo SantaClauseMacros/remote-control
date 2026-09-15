@@ -5,6 +5,8 @@
 //! at the rendezvous relay so clients on other networks can reach it. One
 //! session runs at a time. When idle its cost is a per-minute heartbeat.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -56,13 +58,29 @@ pub struct CoreStatus {
     pub sessions: u32,
     /// Port the LAN listener is bound to (0 if not listening).
     pub listen_port: u16,
-    /// `true` while a connection is parked at the relay.
+    /// `true` while relay parking is enabled.
     pub relay_parked: bool,
+    /// Live: parked at the relay right now, so reachable from any network.
+    pub relay_online: Arc<AtomicBool>,
     /// Number of remembered (paired) devices.
     pub paired_count: usize,
     /// `Some((version, download_url, notes))` once the update checker finds a
     /// newer release. Never populated unless `update.check_url` is configured.
     pub update_available: Option<(String, String, String)>,
+    /// The connected device, while a session is running.
+    pub session: Option<SessionInfo>,
+}
+
+/// Who's connected and how it's going — for the dashboard.
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    /// `"via relay"`, or the LAN peer's address.
+    pub route: String,
+    /// Short id of the connecting device's key.
+    pub key_id: String,
+    /// Unix seconds.
+    pub since: u64,
+    pub stats: Arc<session::LiveStats>,
 }
 
 /// Run the core until [`CoreCommand::Shutdown`] (or the command channel closes).
@@ -172,6 +190,7 @@ pub async fn run(
                 session_task = None;
                 session_stop = None;
                 status.sessions = 0;
+                status.session = None;
                 status.state = if listener.is_some() {
                     CoreState::Listening
                 } else {
@@ -285,12 +304,23 @@ async fn begin_session(
         mode: settings.performance.mode,
         clipboard_sync: settings.security.clipboard_sync,
     };
+    let stats = Arc::new(session::LiveStats::default());
+    let task_stats = stats.clone();
     *session_stop = Some(stop_tx);
     *session_task = Some(tokio::spawn(async move {
-        if let Err(e) = session::run(sess, params, stop_rx).await {
+        if let Err(e) = session::run(sess, params, stop_rx, task_stats).await {
             tracing::error!(error = ?e, "session ended with error");
         }
     }));
+    status.session = Some(SessionInfo {
+        route: peer_label,
+        key_id,
+        since: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        stats,
+    });
     status.state = CoreState::Connected;
     status.sessions = 1;
     publish(status_tx, status);
@@ -356,6 +386,7 @@ fn apply_relay_state(
     *relay_rx = None;
     *relay_stop = None;
     status.relay_parked = false;
+    status.relay_online.store(false, Ordering::Relaxed);
 
     if !settings.enable_remote_access {
         return;
@@ -375,6 +406,7 @@ fn apply_relay_state(
         device_id.to_string(),
         settings.network.relay_key.clone(),
         stop_rx,
+        status.relay_online.clone(),
     );
     *relay_rx = Some(rx);
     *relay_stop = Some(stop_tx);

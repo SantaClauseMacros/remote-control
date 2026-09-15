@@ -13,6 +13,7 @@
 // Release builds have no console window; debug builds keep one for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod dashboard;
 mod diagnostics;
 mod engine;
 mod identity;
@@ -41,6 +42,12 @@ fn main() -> Result<()> {
     std::panic::set_hook(Box::new(|info| {
         tracing::error!(panic = %info, "unhandled panic on some thread");
     }));
+
+    // Developer tool: the app window with made-up data, alongside (not instead
+    // of) any running host — see `dashboard::run_preview`.
+    if std::env::args().any(|a| a == "--dashboard-preview") {
+        return dashboard::run_preview();
+    }
 
     // Physical-pixel coordinates everywhere (capture size, input mapping,
     // cursor). Must happen before any window is created.
@@ -132,6 +139,9 @@ fn main() -> Result<()> {
         status: status_rx,
         exe_path: std::env::current_exe().context("locating own executable")?,
         instance_guard: Mutex::new(Some(instance)),
+        dashboard: std::sync::OnceLock::new(),
+        // A fresh install: show the app so the PC ID and QR code are right there.
+        open_on_start: !config_existed,
     };
 
     // Blocks on the Win32 message loop until Exit / logoff.

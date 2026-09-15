@@ -11,6 +11,8 @@
 //! come out the other side as the same [`rc_transport::relay::BoxedIo`], so
 //! the rest of the engine never needs to know which one it got.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rc_transport::relay::BoxedIo;
@@ -22,11 +24,13 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub type Splice = (BoxedIo, oneshot::Sender<()>);
 
 /// Spawn the parker. Returns the channel the engine polls for spliced streams.
+/// `online` tracks whether the host is currently parked and reachable.
 pub fn spawn(
     relay_addr: String,
     device_id: String,
     key: Option<String>,
     mut stop: watch::Receiver<bool>,
+    online: Arc<AtomicBool>,
 ) -> mpsc::Receiver<Splice> {
     let (tx, rx) = mpsc::channel::<Splice>(1);
 
@@ -40,18 +44,33 @@ pub fn spawn(
             }
 
             let is_ws = relay_addr.starts_with("ws://") || relay_addr.starts_with("wss://");
-            let parked: Result<BoxedIo, _> = tokio::select! {
-                _ = stop.changed() => continue,
-                res = async {
-                    if is_ws {
-                        rc_transport::relay::park_as_host_ws(&relay_addr, &device_id, key.clone()).await
-                    } else {
-                        rc_transport::relay::park_as_host(&relay_addr, &device_id, key.clone())
-                            .await
-                            .map(|s| Box::new(s) as BoxedIo)
-                    }
-                } => res,
+            let park = async {
+                if is_ws {
+                    rc_transport::relay::park_as_host_ws(&relay_addr, &device_id, key.clone()).await
+                } else {
+                    rc_transport::relay::park_as_host(&relay_addr, &device_id, key.clone())
+                        .await
+                        .map(|s| Box::new(s) as BoxedIo)
+                }
             };
+            tokio::pin!(park);
+            // A park only resolves once a client arrives, so a park still
+            // waiting a few seconds in is what "connected and reachable"
+            // looks like — a refused or broken connection fails well before.
+            let reachable_after = tokio::time::sleep(Duration::from_secs(3));
+            tokio::pin!(reachable_after);
+            let mut marked = false;
+            let outcome = loop {
+                tokio::select! {
+                    _ = stop.changed() => break None,
+                    res = &mut park => break Some(res),
+                    _ = &mut reachable_after, if !marked => {
+                        marked = true;
+                        online.store(true, Ordering::Relaxed);
+                    }
+                }
+            };
+            let Some(parked) = outcome else { continue };
 
             match parked {
                 Ok(stream) => {
@@ -69,6 +88,7 @@ pub fn spawn(
                     }
                 }
                 Err(e) => {
+                    online.store(false, Ordering::Relaxed);
                     tracing::warn!(error = %e, retry_in_s = backoff.as_secs(), "relay park failed");
                     tokio::select! {
                         _ = tokio::time::sleep(backoff) => {}
@@ -78,6 +98,7 @@ pub fn spawn(
                 }
             }
         }
+        online.store(false, Ordering::Relaxed);
         tracing::info!("relay parker stopped");
     });
 

@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, KillTimer, LoadIconW,
     PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer,
-    SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, GWLP_USERDATA, HICON,
+    SetMenuDefaultItem, SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, GWLP_USERDATA, HICON,
     MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_COMMAND, WM_DESTROY, WM_ENDSESSION, WM_LBUTTONDBLCLK,
     WM_LBUTTONUP, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
@@ -49,9 +49,10 @@ const ID_COPY_CODE: usize = 5;
 const ID_FORGET_PAIRED: usize = 6;
 const ID_COPY_DIAGNOSTICS: usize = 8;
 const ID_DOWNLOAD_UPDATE: usize = 9;
-const ID_RESTART_ELEVATED: usize = 10;
+pub(crate) const ID_RESTART_ELEVATED: usize = 10;
 const ID_COPY_PHONE_LINK: usize = 11;
-const ID_EXIT: usize = 7;
+const ID_OPEN_APP: usize = 12;
+pub(crate) const ID_EXIT: usize = 7;
 
 /// Timer that refreshes the tray tooltip / fires connect notifications.
 const STATUS_TIMER_ID: usize = 1;
@@ -75,6 +76,10 @@ pub struct AppContext {
     /// Administrator", which must release it before the elevated relaunch so
     /// that instance can acquire it in turn (see `ID_RESTART_ELEVATED`).
     pub instance_guard: Mutex<Option<InstanceGuard>>,
+    /// The app window's local server, started the first time it's opened.
+    pub dashboard: std::sync::OnceLock<crate::dashboard::Dashboard>,
+    /// Open the app window as soon as the tray is up (first run after install).
+    pub open_on_start: bool,
 }
 
 /// Register the window class, create the hidden window, add the tray icon and
@@ -113,11 +118,15 @@ pub fn run(ctx: AppContext) -> Result<()> {
         )
         .context("CreateWindowExW")?;
 
+        let open_on_start = ctx.open_on_start;
         // Hand ownership of the context to the window.
         let boxed = Box::into_raw(Box::new(ctx));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, boxed as isize);
 
         add_tray_icon(hwnd);
+        if open_on_start {
+            let _ = PostMessageW(hwnd, WM_APP_SHOW_SETTINGS, WPARAM(0), LPARAM(0));
+        }
         // Refresh the tooltip / fire connect notifications once a second.
         SetTimer(hwnd, STATUS_TIMER_ID, 1000, None);
         tracing::info!("tray icon active; entering message loop");
@@ -154,7 +163,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TRAYICON => {
             // The mouse event is in the low word of lParam.
             match (lparam.0 as u32) & 0xFFFF {
-                WM_LBUTTONUP | WM_LBUTTONDBLCLK => open_settings(hwnd),
+                WM_LBUTTONUP | WM_LBUTTONDBLCLK => open_dashboard(hwnd),
                 WM_RBUTTONUP => show_menu(hwnd),
                 _ => {}
             }
@@ -169,7 +178,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_APP_SHOW_SETTINGS => {
-            open_settings(hwnd);
+            open_dashboard(hwnd);
             LRESULT(0)
         }
         WM_QUERYENDSESSION => LRESULT(1), // allow logoff/shutdown
@@ -194,7 +203,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 unsafe fn handle_command(hwnd: HWND, id: usize) {
     let Some(ctx) = context(hwnd) else { return };
     match id {
-        ID_OPEN_SETTINGS => open_settings(hwnd),
+        ID_OPEN_APP => open_dashboard(hwnd),
+        ID_OPEN_SETTINGS => open_config_file(hwnd),
         ID_RELOAD_SETTINGS => {
             let _ = ctx.core_tx.send(CoreCommand::ReloadSettings);
             tracing::info!("settings reload requested from tray");
@@ -204,6 +214,11 @@ unsafe fn handle_command(hwnd: HWND, id: usize) {
             match autostart::set(target, &ctx.exe_path) {
                 Ok(()) => {
                     if let Ok(mut s) = ctx.settings.lock() {
+                        // Re-read first: the app window may have changed other
+                        // settings since this copy was loaded.
+                        if let Ok(fresh) = Settings::load(&ctx.paths.config_file()) {
+                            *s = fresh;
+                        }
                         s.start_with_windows = target;
                         if let Err(e) = s.save(&ctx.paths.config_file()) {
                             tracing::warn!(error = %e, "could not persist autostart preference");
@@ -247,9 +262,7 @@ unsafe fn handle_command(hwnd: HWND, id: usize) {
         }
         ID_COPY_PHONE_LINK => {
             let id = ctx.status.borrow().device_id.clone();
-            let link = ctx
-                .settings
-                .lock()
+            let link = Settings::load(&ctx.paths.config_file())
                 .ok()
                 .and_then(|s| s.network.phone_link(&id));
             match link {
@@ -419,10 +432,36 @@ unsafe fn balloon(hwnd: HWND, title: &str, body: &str) {
     let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
-/// Milestone 1: there is no settings *window* yet, so open the config file in
-/// the user's default editor. A later milestone replaces this with the WebView2
-/// settings UI (same entry point).
-unsafe fn open_settings(hwnd: HWND) {
+/// Show the Remote Control app window, starting its local server the first
+/// time. Falls back to the config file if the server can't start.
+unsafe fn open_dashboard(hwnd: HWND) {
+    let Some(ctx) = context(hwnd) else { return };
+    if ctx.dashboard.get().is_none() {
+        let started = crate::dashboard::Dashboard::start(crate::dashboard::DashboardCtx {
+            paths: ctx.paths.clone(),
+            core_tx: ctx.core_tx.clone(),
+            status: ctx.status.clone(),
+            exe_path: ctx.exe_path.clone(),
+            preview: false,
+        });
+        match started {
+            Ok(dashboard) => {
+                let _ = ctx.dashboard.set(dashboard);
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "could not start the app window");
+                open_config_file(hwnd);
+                return;
+            }
+        }
+    }
+    if let Some(dashboard) = ctx.dashboard.get() {
+        dashboard.open_window();
+    }
+}
+
+/// Open config.toml in the user's default editor (advanced settings).
+unsafe fn open_config_file(hwnd: HWND) {
     let Some(ctx) = context(hwnd) else { return };
     let file = HSTRING::from(ctx.paths.config_file().as_os_str());
     let result = ShellExecuteW(
@@ -466,7 +505,9 @@ unsafe fn show_menu(hwnd: HWND) {
     }
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_SETTINGS, w!("Open Settings"));
+    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_APP, w!("Open Remote Control"));
+    let _ = SetMenuDefaultItem(menu, ID_OPEN_APP as u32, 0);
+    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN_SETTINGS, w!("Edit config file (advanced)"));
     let _ = AppendMenuW(
         menu,
         MF_STRING,

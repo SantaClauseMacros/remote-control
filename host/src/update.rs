@@ -46,7 +46,7 @@ pub fn spawn(paths: AppPaths) -> watch::Receiver<Option<UpdateInfo>> {
         let current = env!("CARGO_PKG_VERSION");
         loop {
             let settings = Settings::load(&paths.config_file()).unwrap_or_default();
-            let Some(url) = settings.update.check_url.clone() else {
+            let Some(url) = settings.update.check_url.clone().filter(|u| !u.trim().is_empty()) else {
                 // Not configured — check again only if settings change later
                 // (e.g. the user sets a URL), polling slowly in the meantime.
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;

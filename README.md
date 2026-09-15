@@ -26,18 +26,28 @@ Low-latency screen streaming · full mouse & keyboard · touch game controls · 
 1. **[Download RemoteControlSetup.exe](https://github.com/SantaClauseMacros/remote-control/releases/latest/download/RemoteControlSetup.exe)** and run it.
    - Windows may say **"Windows protected your PC"** because the app isn't code-signed yet. Click **More info → Run anyway**.
    - No administrator rights needed. Leave **Start automatically when I sign in** ticked, so you can connect while you're away.
-2. A **Remote Control icon** appears in the system tray, next to the clock. If you don't see it, click the **^** arrow.
-3. Right-click the icon. You'll see your **PC ID** (like `ABCDE-FGHIJ-KLMNO-P`). Click **Copy link for your phone** and send the link to yourself — Discord, a text, an email, anything.
+2. The **Remote Control app** opens, showing your **PC ID** (like `ABCDE-FGHIJ-KLMNO-P`) and a **QR code**.
+3. It keeps running in the system tray, next to the clock. Click that icon any time to open the app again (check the **^** arrow if you don't see it).
 
 ### 2. On your phone, Chromebook or other computer
 
-1. Open the link you sent yourself. (Or go to **https://remote-control.bloxvault8436200.workers.dev**, tap **+**, and type the PC ID.)
+1. **Scan the QR code** in the Remote Control app with your phone's camera. (Or click **Copy phone link** and send it to yourself, or go to **https://remote-control.bloxvault8436200.workers.dev**, tap **+**, and type the PC ID.)
 2. Give the PC a name, tap **Save**, then **Connect**.
 3. Optional: **Add to Home Screen** (the Share menu on iPhone, the ⋮ menu on Android) so it opens like a normal app.
 
 That's it — no accounts, no port forwarding, no router settings. Works best in **Chrome** or **Edge**, or **Safari** on iPhone and iPad.
 
 ---
+
+## The PC app
+
+Click the tray icon to open it.
+
+- **Home** — your PC ID and QR code, who's connected right now (with live FPS and ping), quick switches, and a health check that tells you if anything needs fixing
+- **Devices** — phones and computers that have connected
+- **Activity** — recent connections, drops and updates
+- **Settings** — PC name, start with Windows, video quality and frame rate, clipboard sync, updates, and tools like *Restart as Administrator*
+- **Help** — how to connect, touch controls, Minecraft mode and common fixes
 
 ## Using it
 
@@ -71,7 +81,7 @@ Tap **?** for the full list. If the hotbar targets don't line up, set **Hotbar s
 
 ## Tips
 
-- **Can't click on Task Manager or admin windows?** Right-click the tray icon → **Restart as Administrator**.
+- **Can't click on Task Manager or admin windows?** In the app, go to **Settings → Tools → Restart as Administrator**.
 - **Laggy or choppy?** Tap **⋯ → Quality → Low**. A wired connection (or 5 GHz Wi-Fi) on the PC helps most.
 - **Running Parsec, OBS or GeForce ShadowPlay too?** They can use up your graphics card's video encoder, which pushes Remote Control onto slower CPU encoding. Close them if things feel slow.
 - **Clipboard** text syncs both ways automatically. You can turn that off in the phone app's **⚙** settings.
