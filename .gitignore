@@ -1,0 +1,40 @@
+/target
+**/target
+**/*.rs.bk
+*.pdb
+
+# Local runtime artefacts (the app writes these under %APPDATA% / %LOCALAPPDATA%,
+# but keep them out of the tree if someone points paths here during dev).
+/run
+*.log
+config.local.toml
+
+# Probe / example output artefacts — these are captures of the developer's
+# own screen, so they must never be committed.
+/capture-probe.*
+/client-frame.*
+/roundtrip.*
+/loopback.mp4
+/*.mp4
+/*.h264
+/*.bmp
+/packets.bin
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Installer build output (built from installer/RemoteControl.iss)
+/installer/output/
+
+# Cloudflare Worker (cf-worker/) — npm/wrangler local state
+/cf-worker/node_modules/
+/cf-worker/.wrangler/
+/cf-worker/wrangler-dev.log
+/cf-worker/*.log
+
+# wasm-pack scratch dir (we build straight into web/pkg, which IS committed —
+# the site must be deployable as static files with no build step on Netlify)
+crates/web/pkg/

@@ -1,0 +1,14 @@
+# TLS termination for the browser (PWA) client.
+#
+# A page served over HTTPS may only open `wss://` sockets, so the relay needs a
+# TLS front. Caddy fetches and renews a Let's Encrypt cert automatically.
+#
+# Replace the hostname, point its DNS A record at this box, open 80 + 443.
+# Native desktop clients do NOT go through here — they hit the relay's raw TCP
+# port (9878) directly.
+
+relay.example.com {
+	encode zstd gzip
+	# Caddy proxies the WebSocket upgrade transparently to the relay.
+	reverse_proxy relay:9878
+}

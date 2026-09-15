@@ -1,0 +1,39 @@
+[package]
+name = "rc-desktop-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Remote Control desktop client (Windows viewer/controller)."
+
+[[bin]]
+name = "rc-desktop-client"
+path = "src/main.rs"
+
+[dependencies]
+rc-transport = { path = "../crates/transport" }
+rc-decode = { path = "../crates/decode" }
+rc-protocol = { path = "../crates/protocol" }
+rc-input = { path = "../crates/input" }
+rc-clipboard = { path = "../crates/clipboard" }
+rc-discovery = { path = "../crates/discovery" }
+rc-crypto = { path = "../crates/crypto" }
+rc-common = { path = "../crates/common" }
+serde_json.workspace = true
+data-encoding.workspace = true
+directories.workspace = true
+
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[target.'cfg(windows)'.dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+]

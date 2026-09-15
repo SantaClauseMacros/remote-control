@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/protocol",
+    "crates/crypto",
+    "crates/transport",
+    "crates/capture",
+    "crates/encode",
+    "crates/decode",
+    "crates/input",
+    "crates/clipboard",
+    "crates/discovery",
+    "crates/web",
+    "host",
+    "desktop-client",
+    "server",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+repository = "https://github.com/SantaClauseMacros/remote-control"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", features = ["alloc"] }
+toml = "0.8"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync", "signal", "net", "io-util"] }
+snow = "0.9"
+mdns-sd = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+directories = "5"
+async-trait = "0.1"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+data-encoding = "2"
+zeroize = "1"
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "tls12"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+[workspace.dependencies.windows]
+version = "0.58"
+
+# Small but real win for a background app: slimmer, faster binaries and lower
+# memory footprint in the shipped build.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

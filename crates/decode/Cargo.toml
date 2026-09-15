@@ -1,0 +1,35 @@
+[package]
+name = "rc-decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "H.264 decoding via Windows Media Foundation (client side)."
+
+[lib]
+name = "rc_decode"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rc-encode = { path = "../encode" }
+
+[dev-dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["sync", "rt"] }
+rc-capture = { path = "../capture" }
+
+[[example]]
+name = "roundtrip"
+path = "examples/roundtrip.rs"
+
+[dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_Media_MediaFoundation",
+    "Win32_Graphics_Dxgi_Common",
+]

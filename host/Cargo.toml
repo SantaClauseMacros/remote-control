@@ -1,0 +1,51 @@
+[package]
+name = "rc-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Remote Control host service for Windows (tray app)."
+default-run = "rc-host"
+
+[[bin]]
+name = "rc-host"
+path = "src/main.rs"
+
+[build-dependencies]
+winresource = "0.1"
+
+[dependencies]
+rc-common = { path = "../crates/common" }
+rc-crypto = { path = "../crates/crypto" }
+rc-protocol = { path = "../crates/protocol" }
+rc-input = { path = "../crates/input" }
+rc-capture = { path = "../crates/capture" }
+rc-encode = { path = "../crates/encode" }
+rc-transport = { path = "../crates/transport" }
+rc-clipboard = { path = "../crates/clipboard" }
+rc-discovery = { path = "../crates/discovery" }
+
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+data-encoding.workspace = true
+toml.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+ureq.workspace = true
+
+[target.'cfg(windows)'.dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_Registry",
+    "Win32_Security",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+]

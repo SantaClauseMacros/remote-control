@@ -1,0 +1,37 @@
+# Deploy: `npx wrangler login` once, then `npx wrangler deploy` from this
+# directory. Local dev (no Cloudflare account needed): `npx wrangler dev`.
+#
+# Change `name` before your first deploy if you want a different
+# <name>.<your-subdomain>.workers.dev URL — Cloudflare picks the subdomain
+# from your account the first time you deploy anything.
+name = "remote-control"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+# The PWA (web/) is served as static assets from the same Worker — visiting
+# the workers.dev URL on a phone opens the app directly.
+[assets]
+directory = "../web"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# One Durable Object instance ("global", created in relay.ts) holds the
+# parked-host / spliced-client state for the rendezvous relay. Durable
+# Objects need a Workers **paid** plan on most Cloudflare accounts — check
+# the deploy output; if it's rejected for that reason, it's a plan change on
+# dash.cloudflare.com, not a code problem.
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayRouter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayRouter"]
+
+# Optional shared secret gating who can park/connect (mirrors rc-relay's
+# `--key`). Leave unset to allow anyone who knows a device_id to try — fine
+# since every session is still Noise-authenticated end to end; the key is
+# just an extra gate at the relay. To set one:
+#   npx wrangler secret put RELAY_KEY
+# then put the same string in the host's config.toml `network.relay_key` and
+# the web app's Settings → "Relay access key".

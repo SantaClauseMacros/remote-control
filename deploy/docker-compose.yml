@@ -1,0 +1,49 @@
+# Self-host the Remote Control rendezvous relay.
+#
+#   cd deploy && docker compose up -d
+#
+# On the host PC set  network.signaling_url  in
+# %APPDATA%\RemoteControl\RemoteControl\config\config.toml:
+#   - native desktop clients:  "<server>:9878"       (raw TCP, direct)
+#   - the browser / phone PWA needs TLS, so also run the `caddy` service below
+#     and use  wss://relay.example.com  in the PWA's relay field.
+# Set network.relay_key too if you use RC_RELAY_KEY.
+#
+# The relay only ever forwards the already-Noise-encrypted stream between a host
+# and a client matched by device id. It cannot read or forge a session.
+
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: remote-control-relay:latest
+    restart: unless-stopped
+    ports:
+      - "9878:9878"          # raw TCP for native desktop clients
+    command: >
+      --bind 0.0.0.0:9878
+      ${RC_RELAY_KEY:+--key ${RC_RELAY_KEY}}
+      --max-conns 512
+    environment:
+      - RC_LOG=info
+
+  # TLS front for the browser / phone PWA (wss://). Comment this out if you
+  # only use the native desktop client. Edit deploy/Caddyfile with your domain.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [relay]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+  # A TURN server for the direct-P2P (WebRTC) path is milestone 4b.

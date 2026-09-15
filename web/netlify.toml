@@ -1,0 +1,31 @@
+# Deploy the web client to Netlify: point it at the repo, set publish dir to
+# "web", leave the build command empty (web/pkg is committed). Or run
+# `wasm-pack build crates/web --target web --out-dir web/pkg` in the build step
+# if you prefer not to commit the wasm.
+
+[build]
+  publish = "web"
+  command = ""
+
+# WASM must be served with the right type; the app + wasm can be cached hard
+# because file names change on rebuild only for pkg (bump manually if needed).
+[[headers]]
+  for = "/pkg/*.wasm"
+  [headers.values]
+    Content-Type = "application/wasm"
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # WebCodecs + cross-origin isolation aren't required here, but these are
+    # good hygiene for a control surface.
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+
+# SPA-style: the app is a single page; deep links use the hash, so a plain
+# fallback to index.html is enough.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

@@ -1,0 +1,42 @@
+[package]
+name = "rc-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rc_transport"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+rustls.workspace = true
+snow.workspace = true
+rc-crypto = { path = "../crypto" }
+rc-protocol = { path = "../protocol" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tracing-subscriber.workspace = true
+
+# The LAN transport (TCP + Noise) is the milestone-3 implementation. A WebRTC
+# implementation for NAT traversal / internet is added in milestone 4 behind
+# the same `Session` trait.
+
+[[example]]
+name = "loopback"
+path = "examples/loopback.rs"
+
+[[example]]
+name = "ws_relay_check"
+path = "examples/ws_relay_check.rs"
+
+[[example]]
+name = "ws_park_hold"
+path = "examples/ws_park_hold.rs"

@@ -1,0 +1,40 @@
+[package]
+name = "rc-encode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "H.264 video encoding via Windows Media Foundation (hardware when available)."
+
+[lib]
+name = "rc_encode"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+rc-capture = { path = "../capture" }
+
+[dev-dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["sync", "rt"] }
+
+[dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_Media_MediaFoundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
+]
+
+[[example]]
+name = "record"
+path = "examples/record.rs"
+
+[[example]]
+name = "stream_probe"
+path = "examples/stream_probe.rs"

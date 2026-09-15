@@ -1,0 +1,283 @@
+:root {
+  --bg: #0b0d10;
+  --surface: #16191e;
+  --surface-2: #1e232a;
+  --line: #2a2f37;
+  --text: #f2f4f7;
+  --dim: #8b93a1;
+  --accent: #4c8dff;
+  --danger: #ff5a5f;
+  --ok: #35d07f;
+  --radius: 16px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+body { display: flex; flex-direction: column; }
+.screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.screen.center { align-items: center; justify-content: center; gap: 20px; }
+[hidden] { display: none !important; }
+
+/* ── top bar ── */
+.bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: calc(14px + var(--safe-t)) 20px 14px;
+}
+.bar h1 { font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
+.icon-btn {
+  background: none; border: 0; color: var(--dim); font-size: 22px;
+  width: 40px; height: 40px; border-radius: 12px;
+}
+.icon-btn:active { background: var(--surface-2); }
+
+/* ── device list ── */
+.list { flex: 1; overflow-y: auto; padding: 4px 16px 120px; display: flex; flex-direction: column; gap: 12px; }
+.card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 16px 18px;
+  display: flex; align-items: center; gap: 14px;
+  transition: transform .12s ease, background .12s ease;
+}
+.card:active { transform: scale(.985); background: var(--surface-2); }
+.card .meta { flex: 1; min-width: 0; }
+.card .name { font-weight: 600; font-size: 17px; }
+.card .sub { color: var(--dim); font-size: 13px; margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+.dot.online { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+.dot.offline { background: #444b57; }
+.card .go {
+  background: var(--accent); color: #fff; border: 0; font-weight: 600;
+  padding: 9px 16px; border-radius: 999px; font-size: 14px;
+}
+.card .go:disabled { background: var(--surface-2); color: var(--dim); }
+.card .kebab { background: none; border: 0; color: var(--dim); font-size: 20px; padding: 4px 6px; }
+
+.empty { margin: auto; text-align: center; padding: 40px; max-width: 340px; align-self: center; }
+#screen-list { justify-content: flex-start; }
+.dim { color: var(--dim); }
+
+.fab {
+  position: fixed; right: 20px; bottom: calc(22px + var(--safe-b));
+  width: 60px; height: 60px; border-radius: 50%; border: 0;
+  background: var(--accent); color: #fff; font-size: 32px; line-height: 1;
+  box-shadow: 0 10px 30px rgba(76,141,255,.4);
+}
+.fab:active { transform: scale(.94); }
+
+/* ── connecting ── */
+.spinner {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 3px solid var(--line); border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#connecting-text { color: var(--dim); }
+
+/* ── viewer ── */
+.viewer { background: #000; position: relative; }
+.stage {
+  position: absolute;
+  /* Window controls, scrollbars, edge-docked taskbars — all the fiddly
+     stuff a remote desktop puts right at its screen edges — mapped 1:1
+     onto the phone's own physical edges, which is exactly where a thumb
+     can't reliably tap: iOS and Android both grab edge touches first for
+     their own gestures (notification shade, back-swipe, home indicator),
+     and a curved-edge display makes even ordinary taps unreliable right
+     at the glass edge. A permanent margin on all four sides means nothing
+     in the remote screen ever maps to a physical edge.
+     `--safe-*` covers a notch/home-indicator/rounded-corner cutout beyond
+     this; `max()` keeps the same minimum margin everywhere else. */
+  top: max(22px, var(--safe-t));
+  bottom: max(22px, var(--safe-b));
+  left: max(14px, var(--safe-l));
+  right: max(14px, var(--safe-r));
+  overflow: hidden; touch-action: none;
+}
+#screen { position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; image-rendering: auto; }
+.cursor {
+  position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+  border: 2px solid #fff; border-radius: 50%; pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 8px rgba(0,0,0,.5);
+  transition: opacity .2s;
+}
+.toast {
+  position: absolute; left: 50%; top: 18px; transform: translateX(-50%);
+  background: rgba(0,0,0,.75); backdrop-filter: blur(8px);
+  padding: 8px 16px; border-radius: 999px; font-size: 13px;
+  border: 1px solid var(--line);
+}
+.hud {
+  position: absolute; right: 14px; top: 14px;
+  background: rgba(20,23,28,.55); border: 1px solid rgba(255,255,255,.12);
+  color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums;
+  padding: 5px 10px; border-radius: 999px; opacity: .65;
+  pointer-events: none; letter-spacing: .02em;
+}
+.hud:empty { display: none; }
+
+.controls {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; justify-content: space-around; gap: 6px;
+  padding: 10px 10px calc(10px + var(--safe-b));
+  background: linear-gradient(transparent, rgba(0,0,0,.82) 40%);
+  transition: transform .25s ease, opacity .25s ease;
+}
+.controls.hidden { transform: translateY(120%); opacity: 0; }
+.ctl {
+  flex: 1; max-width: 84px; background: rgba(30,35,42,.9); border: 1px solid var(--line);
+  color: var(--text); border-radius: 14px; padding: 10px 4px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font-size: 20px;
+}
+.ctl span { font-size: 11px; color: var(--dim); }
+.ctl:active { background: var(--surface-2); }
+.ctl.danger { color: var(--danger); }
+.ctl.on { border-color: var(--accent); color: var(--accent); }
+
+.specials {
+  position: absolute; left: 0; right: 0; bottom: 86px;
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 12px;
+  background: rgba(11,13,16,.92); backdrop-filter: blur(10px);
+  border-top: 1px solid var(--line);
+  max-height: 45vh; overflow-y: auto;
+}
+.specials button {
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 10px; padding: 10px 12px; font-size: 14px; min-width: 52px;
+}
+.specials button:active { background: var(--accent); }
+.specials button.mod.held { background: var(--accent); color: #fff; }
+
+/* ── movement joystick (WASD) ── */
+.joystick {
+  /* Positioned within .stage, which already insets for safe-area on every
+     side — no need to add it again here, these are just plain offsets
+     from .stage's own (already-safe) box. */
+  position: absolute; left: 18px; bottom: 18px;
+  width: 132px; height: 132px; border-radius: 50%;
+  background: rgba(30,35,42,.55); border: 1px solid rgba(255,255,255,.12);
+  touch-action: none; transition: opacity .2s, background .15s;
+}
+.joystick.active { background: rgba(30,35,42,.8); border-color: var(--accent); }
+.joystick .knob {
+  position: absolute; left: 50%; top: 50%; width: 56px; height: 56px;
+  margin: -28px 0 0 -28px; border-radius: 50%;
+  background: rgba(76,141,255,.35); border: 1px solid var(--accent);
+  pointer-events: none; will-change: transform;
+}
+.joystick.active .knob { background: var(--accent); }
+
+/* ── game pad ──
+   Built per game mode (see GAME_MODES in app.js). Laid out for a landscape
+   phone: utility keys top-left, actions under the right thumb, joystick under
+   the left, and hotbar targets over the game's own hotbar. */
+.pad { position: absolute; inset: 0; pointer-events: none; }
+.pad button {
+  pointer-events: auto; touch-action: none; padding: 0;
+  background: rgba(30,35,42,.7); border: 1px solid rgba(255,255,255,.14);
+  color: var(--text); font-size: 12px; font-weight: 600; border-radius: 12px;
+}
+.pad button.active, .pad button.latched { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Right of the 🕹 toggle. */
+.pad-top-left { position: absolute; left: 60px; top: 14px; display: flex; gap: 6px; }
+.pad-top-left button { width: 50px; height: 34px; }
+.pad-main {
+  position: absolute; right: 14px; bottom: 14px;
+  display: grid; grid-template-columns: repeat(2, 60px); gap: 8px;
+}
+.pad-main button { height: 54px; border-radius: 16px; font-size: 13px; }
+/* Invisible tap targets laid exactly over the game's own hotbar (placed from
+   JS); the tapped slot flashes so a tap visibly registered. */
+.pad-hotbar { position: absolute; pointer-events: auto; touch-action: none; }
+.pad-slot-flash {
+  position: absolute; top: 0; bottom: 0; opacity: 0; pointer-events: none;
+  border: 2px solid rgba(255,255,255,.9); border-radius: 3px;
+}
+.pad-slot-flash.on { animation: slot-flash .35s ease-out; }
+@keyframes slot-flash { from { opacity: 1; } to { opacity: 0; } }
+.pad button.pad-beside { position: absolute; }
+
+.thumb-toggle {
+  position: absolute; left: 14px; top: 14px;
+  width: 38px; height: 38px; border-radius: 50%;
+  background: rgba(20,23,28,.55); border: 1px solid rgba(255,255,255,.12);
+  color: var(--text); font-size: 16px; opacity: .65;
+}
+.thumb-toggle:active { background: var(--surface-2); }
+.thumb-toggle.on { opacity: 1; border-color: var(--accent); color: var(--accent); }
+
+/* The only always-on-screen control: everything else (Keys/Special/
+   Quality/Leave) stays out of the way — hidden by default, and doesn't
+   pop back up just because you tapped the screen — so it never sits over
+   a game's own UI or the remote taskbar at the bottom of the screen. */
+.menu-toggle {
+  position: absolute; left: 14px; bottom: 14px;
+  width: 38px; height: 38px; border-radius: 50%;
+  background: rgba(20,23,28,.55); border: 1px solid rgba(255,255,255,.12);
+  color: var(--text); font-size: 18px; font-weight: 700; opacity: .65;
+}
+.menu-toggle:active, .menu-toggle.on { background: var(--surface-2); opacity: 1; border-color: var(--accent); color: var(--accent); }
+/* With the game pad up the joystick takes the bottom-left corner, so the menu
+   button moves up under the 🕹 toggle. */
+.stage.pad-on .menu-toggle { top: 60px; bottom: auto; }
+
+.kbd-trap {
+  position: absolute; opacity: 0; pointer-events: none;
+  width: 1px; height: 1px; bottom: 0; left: 0; border: 0;
+}
+
+/* ── dialogs / sheets ── */
+dialog {
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  border-radius: 20px; padding: 22px; width: min(92vw, 420px);
+}
+dialog::backdrop { background: rgba(0,0,0,.6); backdrop-filter: blur(2px); }
+dialog h2 { margin: 0 0 16px; font-size: 19px; }
+dialog label { display: block; margin-bottom: 14px; font-size: 13px; color: var(--dim); }
+dialog label.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text); font-size: 15px; }
+dialog input[type=text], dialog input:not([type]) , dialog input[type=password] {
+  display: block; width: 100%; margin-top: 6px;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 12px; padding: 12px 14px; font-size: 16px;
+}
+dialog input[type=range] { flex: 1; accent-color: var(--accent); }
+dialog input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+dialog select {
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 10px; padding: 8px 10px; font-size: 15px;
+}
+.help-note { font-size: 12px; margin: -6px 0 12px; }
+dialog menu { display: flex; gap: 10px; justify-content: flex-end; margin: 8px 0 0; padding: 0; }
+.help { margin: 0 0 14px; padding-left: 18px; font-size: 14px; line-height: 1.6; }
+.help b { color: var(--accent); }
+.btn { border: 0; border-radius: 12px; padding: 11px 18px; font-size: 15px; font-weight: 600; }
+.btn.primary { background: var(--accent); color: #fff; }
+.btn.ghost { background: var(--surface-2); color: var(--text); }
+.btn.danger { background: var(--danger); color: #fff; }
+
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  background: var(--surface); border-top: 1px solid var(--line);
+  border-radius: 20px 20px 0 0; padding: 12px 12px calc(16px + var(--safe-b));
+  display: flex; flex-direction: column; gap: 8px;
+  animation: rise .2s ease;
+}
+@keyframes rise { from { transform: translateY(100%); } }
+.sheet button {
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 12px; padding: 15px; font-size: 16px; text-align: left;
+}
+.sheet button:active { background: var(--accent); color: #fff; }

@@ -1,0 +1,28 @@
+[package]
+name = "rc-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WASM bridge for the browser client: Noise session + framing + protocol codec."
+
+[lib]
+name = "rc_web"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+serde = { workspace = true }
+serde-wasm-bindgen = "0.6"
+snow = { workspace = true }
+sha2 = { workspace = true }
+rc-protocol = { path = "../protocol" }
+# Enables the browser RNG backend for Noise's ephemeral keypair generation.
+getrandom = { version = "0.2", features = ["js"] }
+
+# The wasm-opt binary wasm-pack currently bundles predates this toolchain's
+# bulk-memory wasm output and rejects it outright — disable the (purely
+# size/perf) post-build pass rather than pin an older Rust toolchain for it.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

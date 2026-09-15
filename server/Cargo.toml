@@ -1,0 +1,19 @@
+[package]
+name = "rc-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rendezvous relay: matches a parked host to a client and copies ciphertext between them."
+
+[[bin]]
+name = "rc-relay"
+path = "src/main.rs"
+
+[dependencies]
+rc-protocol = { path = "../crates/protocol" }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }

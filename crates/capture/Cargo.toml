@@ -1,0 +1,35 @@
+[package]
+name = "rc-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Screen capture via the DXGI Desktop Duplication API."
+
+[lib]
+name = "rc_capture"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
+]
+
+[[example]]
+name = "grab"
+path = "examples/grab.rs"

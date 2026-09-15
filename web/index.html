@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#0b0d10" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Remote Control" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="stylesheet" href="style.css" />
+<title>Remote Control</title>
+</head>
+<body>
+
+<!-- ─── Device list ─────────────────────────────────────────────── -->
+<main id="screen-list" class="screen">
+  <header class="bar">
+    <h1>My Computers</h1>
+    <button id="btn-settings" class="icon-btn" aria-label="Settings">⚙</button>
+  </header>
+
+  <div id="device-list" class="list"></div>
+
+  <div id="empty" class="empty" hidden>
+    <p>No computers yet.</p>
+    <p class="dim">Add one with the button below — all you need is its PC ID
+    from the tray menu on the PC.</p>
+  </div>
+
+  <button id="btn-add" class="fab" aria-label="Add computer">+</button>
+</main>
+
+<!-- ─── Connecting ──────────────────────────────────────────────── -->
+<section id="screen-connecting" class="screen center" hidden>
+  <div class="spinner"></div>
+  <p id="connecting-text">Connecting…</p>
+  <button id="btn-cancel" class="btn ghost">Cancel</button>
+</section>
+
+<!-- ─── Viewer ──────────────────────────────────────────────────── -->
+<section id="screen-viewer" class="screen viewer" hidden>
+  <div id="stage" class="stage">
+    <canvas id="screen"></canvas>
+    <div id="cursor" class="cursor" hidden></div>
+    <div id="toast" class="toast" hidden></div>
+    <div id="hud" class="hud"></div>
+    <div id="joystick" class="joystick" hidden>
+      <div class="knob"></div>
+    </div>
+    <!-- Game pad: built from the active game mode (GAME_MODES in app.js).
+         Shown together with the movement joystick. -->
+    <div id="pad" class="pad" hidden></div>
+    <button id="btn-joystick-toggle" class="thumb-toggle" aria-label="Toggle movement pad">🕹</button>
+    <button id="btn-controls-toggle" class="menu-toggle" aria-label="Show controls">⋯</button>
+  </div>
+
+  <div id="controls" class="controls hidden">
+    <button data-act="keyboard" class="ctl">⌨<span>Keys</span></button>
+    <button data-act="specials" class="ctl">⋯<span>Special</span></button>
+    <button data-act="mode" class="ctl" id="mode-btn">🖱<span>Trackpad</span></button>
+    <button data-act="quality" class="ctl">◔<span>Quality</span></button>
+    <button data-act="disconnect" class="ctl danger">⏻<span>Leave</span></button>
+  </div>
+
+  <div id="specials" class="specials" hidden>
+    <button data-key="27">Esc</button>
+    <button data-key="9">Tab</button>
+    <button data-mod="17" class="mod">Ctrl</button>
+    <button data-mod="18" class="mod">Alt</button>
+    <button data-mod="16" class="mod">Shift</button>
+    <button data-mod="91" class="mod">Win</button>
+    <button data-key="46">Del</button>
+    <button data-key="36">Home</button>
+    <button data-key="35">End</button>
+    <button data-key="33">PgUp</button>
+    <button data-key="34">PgDn</button>
+    <button data-key="38">▲</button>
+    <button data-key="37">◀</button>
+    <button data-key="40">▼</button>
+    <button data-key="39">▶</button>
+    <button data-combo="17,67">Ctrl+C</button>
+    <button data-combo="17,86">Ctrl+V</button>
+    <button data-combo="17,90">Ctrl+Z</button>
+    <button data-combo="18,9">Alt+Tab</button>
+    <button data-key="32">Space</button>
+    <button data-key="112">F1</button>
+    <button data-key="113">F2</button>
+    <button data-key="114">F3</button>
+    <button data-key="115">F4</button>
+    <button data-key="116">F5</button>
+    <button data-key="117">F6</button>
+    <button data-key="118">F7</button>
+    <button data-key="119">F8</button>
+    <button data-key="120">F9</button>
+    <button data-key="121">F10</button>
+    <button data-key="122">F11</button>
+    <button data-key="123">F12</button>
+  </div>
+
+  <input id="kbd" class="kbd-trap" autocomplete="off" autocorrect="off"
+         autocapitalize="off" spellcheck="false" aria-hidden="true" />
+</section>
+
+<!-- ─── Add / edit dialog ───────────────────────────────────────── -->
+<dialog id="dlg-device">
+  <form method="dialog">
+    <h2 id="dlg-title">Add a computer</h2>
+    <label>Name<input name="name" required maxlength="40" placeholder="My Gaming PC" /></label>
+    <label>PC ID
+      <input name="deviceId" required placeholder="ABCDE-FGHIJ-KLMNO-P"
+             pattern="[A-Za-z0-9-]{15,25}" />
+    </label>
+    <label>Relay <span class="dim">(blank = use default)</span>
+      <input name="relay" placeholder="blank = this site's own relay" />
+    </label>
+    <menu>
+      <button value="cancel" class="btn ghost">Cancel</button>
+      <button value="save" class="btn primary" id="dlg-save">Save</button>
+    </menu>
+  </form>
+</dialog>
+
+<!-- ─── Settings dialog ─────────────────────────────────────────── -->
+<dialog id="dlg-settings">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <label>Default relay
+      <input name="relay" placeholder="blank = this site's own relay" />
+    </label>
+    <label>Optional relay key
+      <input name="relayKey" placeholder="(blank if the relay has no --key)" />
+    </label>
+    <label class="row">
+      Pointer sensitivity
+      <input name="sens" type="range" min="0.5" max="3" step="0.1" />
+    </label>
+    <label class="row">
+      <input name="clip" type="checkbox" /> Sync clipboard text
+    </label>
+    <label class="row">
+      <input name="invertScroll" type="checkbox" /> Invert scroll direction
+    </label>
+    <menu>
+      <button value="ok" class="btn primary">Done</button>
+    </menu>
+  </form>
+</dialog>
+
+<!-- ─── Game controls help ──────────────────────────────────────── -->
+<dialog id="dlg-help">
+  <form method="dialog">
+    <h2>Minecraft controls</h2>
+    <ul class="help">
+      <li><b>Tap anywhere</b> — hit · <b>hold</b> — mine</li>
+      <li><b>Drag</b> — look around</li>
+      <li><b>Hotbar</b> — tap the slot right on the game's own hotbar</li>
+      <li><b>Inv</b> left of the hotbar · <b>Drop</b> right of it</li>
+      <li><b>Use</b> or <b>two-finger tap</b> — place / eat / use</li>
+      <li><b>Joystick</b> — walk · <b>Jump</b> · <b>Sprint</b> (Shift) and <b>Crouch</b> (Ctrl) tap on / off</li>
+      <li><b>Esc</b>, <b>Chat</b>, <b>View</b> (F5), <b>Swap</b> (F) — top-left</li>
+      <li>In your inventory and menus, tap exactly where you want to click; hold to drag an item</li>
+      <li><b>🕹</b> — show / hide controls · <b>⋯</b> — keyboard, quality, leave</li>
+    </ul>
+    <label class="row">Hotbar size (match Minecraft's GUI Scale)
+      <select name="gui">
+        <option value="0">Auto</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="5">5</option>
+        <option value="6">6</option>
+      </select>
+    </label>
+    <p class="help-note dim">Play Minecraft fullscreen (F11) so the hotbar lines up.</p>
+    <menu><button value="ok" class="btn primary">Got it</button></menu>
+  </form>
+</dialog>
+
+<div id="quality-sheet" class="sheet" hidden>
+  <button data-q="low">Low — smoothest</button>
+  <button data-q="balanced">Balanced</button>
+  <button data-q="high">High — sharpest</button>
+  <button data-q="auto">Auto</button>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
