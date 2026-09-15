@@ -208,7 +208,10 @@ pub async fn run(
 
     // A PC with more than one monitor: mirror or move windows for the
     // session, undone in the teardown block below.
-    let monitor_restore = display::apply(params.multi_monitor);
+    let (monitor_restore, monitor_warning) = display::apply(params.multi_monitor);
+    if let Some(warning) = monitor_warning {
+        link.send(&HostMessage::Notice(warning)).await;
+    }
 
     // ── capture thread: reports geometry, then waits for the encoder ─────────
     let capture_stop = Arc::new(AtomicBool::new(false));

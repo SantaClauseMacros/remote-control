@@ -54,24 +54,31 @@ pub fn monitor_count() -> u32 {
 }
 
 /// Apply `mode` for a session that's about to start. A no-op (and `Restore::None`)
-/// on a single-monitor PC regardless of `mode`.
-pub fn apply(mode: MultiMonitorMode) -> Restore {
+/// on a single-monitor PC regardless of `mode`. The second value is a
+/// human-readable failure to show the connecting device — `None` on success
+/// or when there was nothing to do.
+pub fn apply(mode: MultiMonitorMode) -> (Restore, Option<String>) {
     if mode == MultiMonitorMode::Ignore || monitor_count() < 2 {
-        return Restore::None;
+        return (Restore::None, None);
     }
     match mode {
-        MultiMonitorMode::Ignore => Restore::None,
+        MultiMonitorMode::Ignore => (Restore::None, None),
         MultiMonitorMode::Duplicate => unsafe {
             let code = SetDisplayConfig(None, None, SDC_TOPOLOGY_CLONE | SDC_APPLY);
             if code == 0 {
                 tracing::info!("switched displays to duplicate for this session");
-                Restore::Topology
+                (Restore::Topology, None)
             } else {
                 tracing::warn!(code, "couldn't switch to duplicate display mode");
-                Restore::None
+                let why = match code {
+                    31 => "your monitors don't support matching modes for it".to_string(),
+                    87 => "Windows rejected the request".to_string(),
+                    _ => format!("Windows error {code}"),
+                };
+                (Restore::None, Some(format!("Couldn't switch displays to duplicate — {why}.")))
             }
         },
-        MultiMonitorMode::MoveToMain => Restore::Windows(move_windows_to_primary()),
+        MultiMonitorMode::MoveToMain => (Restore::Windows(move_windows_to_primary()), None),
     }
 }
 

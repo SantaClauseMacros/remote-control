@@ -116,7 +116,7 @@ Without VB-CABLE installed, the mic toggle still works — your phone's mic just
 - **Running Parsec, OBS or GeForce ShadowPlay too?** They can use up your graphics card's video encoder, which pushes Remote Control onto slower CPU encoding. Close them if things feel slow.
 - **Clipboard** text syncs both ways automatically. You can turn that off in the phone app's **⚙** settings.
 - **Second monitor?** Only your primary display is streamed by default. In **Settings → Multiple monitors**, choose to duplicate everything onto the primary display, or move windows there, for the length of a session — it's undone automatically when you disconnect.
-- **PC going to sleep while you're out?** Turn on **Keep this PC awake** in Settings so it stays reachable.
+- **PC going to sleep — or its screen turning off — while you're out?** Turn on **Keep this PC awake** in Settings. Windows' screen capture generally can't see a display that's powered off, even though the PC itself is still awake and signed in, so this stops that from happening in the first place.
 - **Updates:** the tray icon and app both tell you when a new version is out, with a one-click **Install now** that downloads and installs it, then restarts the app — your PC ID and settings are kept either way.
 
 ---
@@ -141,7 +141,7 @@ Check that the PC is switched on, signed in, and the Remote Control tray icon is
 <details>
 <summary><b>Black screen, or the picture freezes</b></summary>
 
-Tap **⋯ → Leave** and connect again. If it keeps happening, try **⋯ → Quality → Low**. Windows doesn't allow screen capture on the lock screen or on admin prompts, so sign in on the PC first.
+Tap **⋯ → Leave** and connect again. If it keeps happening, try **⋯ → Quality → Low**. Windows doesn't allow screen capture on the lock screen or on admin prompts, so sign in on the PC first. A screen that turned itself off from Windows' own power-save timeout causes the same freeze — turn on **Keep this PC awake** in Settings to stop that.
 </details>
 
 <details>
