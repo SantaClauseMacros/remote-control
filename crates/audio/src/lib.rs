@@ -11,6 +11,10 @@
 pub mod adpcm;
 #[cfg(windows)]
 mod loopback;
+#[cfg(windows)]
+pub mod render;
 
 #[cfg(windows)]
 pub use loopback::stream_loopback;
+#[cfg(windows)]
+pub use render::render_mic;

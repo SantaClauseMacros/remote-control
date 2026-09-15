@@ -55,6 +55,13 @@ export class Session {
      */
     seal_keyframe_request(): Uint8Array;
     /**
+     * Encrypt+frame a microphone packet (already-encoded ADPCM bytes, same
+     * layout as `crates/audio/src/adpcm.rs`) — the browser's side of the
+     * native client's `LanSession::send_mic`. Only the host reads this
+     * channel; nothing is ever sent back on it.
+     */
+    seal_mic(payload: Uint8Array): Uint8Array;
+    /**
      * Framed bytes queued by `feed()` echoing a keepalive ping — call once
      * right after `feed()` and send each one over the WebSocket. Separate
      * from `feed()`'s return value because sending is JS's job everywhere
@@ -98,6 +105,25 @@ export function enc_direct_offer(sdp: string): Uint8Array;
 export function enc_direct_use(): Uint8Array;
 
 export function enc_disconnect(): Uint8Array;
+
+export function enc_file_chunk(id: number, offset: number, data: Uint8Array): Uint8Array;
+
+export function enc_file_done(id: number): Uint8Array;
+
+/**
+ * Offer a file to the host: the start of a transfer. Chunk it with
+ * `enc_file_chunk` afterward and finish with `enc_file_done`.
+ */
+export function enc_file_offer(id: number, name: string, size: number): Uint8Array;
+
+export function enc_gamepad_disconnect(): Uint8Array;
+
+/**
+ * One controller frame. `buttons` is already XInput's bit layout (see
+ * `GAMEPAD_BUTTON_*` constants below) — the host hands it straight to a
+ * virtual Xbox 360 controller with no remapping.
+ */
+export function enc_gamepad_state(buttons: number, left_trigger: number, right_trigger: number, thumb_lx: number, thumb_ly: number, thumb_rx: number, thumb_ry: number): Uint8Array;
 
 export function enc_key(code: number, pressed: boolean): Uint8Array;
 
@@ -170,6 +196,11 @@ export interface InitOutput {
     readonly enc_direct_offer: (a: number, b: number, c: number) => void;
     readonly enc_direct_use: (a: number) => void;
     readonly enc_disconnect: (a: number) => void;
+    readonly enc_file_chunk: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly enc_file_done: (a: number, b: number) => void;
+    readonly enc_file_offer: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly enc_gamepad_disconnect: (a: number) => void;
+    readonly enc_gamepad_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly enc_key: (a: number, b: number, c: number) => void;
     readonly enc_ping: (a: number, b: number) => void;
     readonly enc_pointer_button: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -193,6 +224,7 @@ export interface InitOutput {
     readonly session_ready: (a: number) => number;
     readonly session_seal_control: (a: number, b: number, c: number, d: number) => void;
     readonly session_seal_keyframe_request: (a: number, b: number) => void;
+    readonly session_seal_mic: (a: number, b: number, c: number, d: number) => void;
     readonly session_take_keepalive_replies: (a: number) => number;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;

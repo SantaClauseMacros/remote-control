@@ -24,6 +24,8 @@ pub const CH_CONTROL: u8 = 0;
 pub const CH_VIDEO: u8 = 1;
 const CH_KEEPALIVE: u8 = 2;
 const CH_KEYFRAME_REQ: u8 = 3;
+/// Encoded microphone packets, browser → host — must match `rc_transport::lan`.
+const CH_MIC: u8 = 5;
 
 fn js(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
@@ -232,6 +234,14 @@ impl Session {
         self.seal(CH_KEYFRAME_REQ, &[])
     }
 
+    /// Encrypt+frame a microphone packet (already-encoded ADPCM bytes, same
+    /// layout as `crates/audio/src/adpcm.rs`) — the browser's side of the
+    /// native client's `LanSession::send_mic`. Only the host reads this
+    /// channel; nothing is ever sent back on it.
+    pub fn seal_mic(&mut self, payload: &[u8]) -> Result<Vec<u8>, JsValue> {
+        self.seal(CH_MIC, payload)
+    }
+
     fn seal(&mut self, channel: u8, payload: &[u8]) -> Result<Vec<u8>, JsValue> {
         let ts = self.ts.as_mut().ok_or_else(|| jss("not connected"))?;
         let mut plain = Vec::with_capacity(payload.len() + 1);
@@ -435,6 +445,53 @@ pub fn enc_direct_use() -> Vec<u8> {
     enc(&ClientMessage::DirectUse)
 }
 
+/// One controller frame. `buttons` is already XInput's bit layout (see
+/// `GAMEPAD_BUTTON_*` constants below) — the host hands it straight to a
+/// virtual Xbox 360 controller with no remapping.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn enc_gamepad_state(
+    buttons: u16,
+    left_trigger: u8,
+    right_trigger: u8,
+    thumb_lx: i16,
+    thumb_ly: i16,
+    thumb_rx: i16,
+    thumb_ry: i16,
+) -> Vec<u8> {
+    enc(&ClientMessage::GamepadState {
+        buttons,
+        left_trigger,
+        right_trigger,
+        thumb_lx,
+        thumb_ly,
+        thumb_rx,
+        thumb_ry,
+    })
+}
+
+#[wasm_bindgen]
+pub fn enc_gamepad_disconnect() -> Vec<u8> {
+    enc(&ClientMessage::GamepadDisconnect)
+}
+
+/// Offer a file to the host: the start of a transfer. Chunk it with
+/// `enc_file_chunk` afterward and finish with `enc_file_done`.
+#[wasm_bindgen]
+pub fn enc_file_offer(id: u32, name: &str, size: f64) -> Vec<u8> {
+    enc(&ClientMessage::FileOffer { id, name: name.to_string(), size: size as u64 })
+}
+
+#[wasm_bindgen]
+pub fn enc_file_chunk(id: u32, offset: f64, data: &[u8]) -> Vec<u8> {
+    enc(&ClientMessage::FileChunk { id, offset: offset as u64, data: data.to_vec() })
+}
+
+#[wasm_bindgen]
+pub fn enc_file_done(id: u32) -> Vec<u8> {
+    enc(&ClientMessage::FileDone { id })
+}
+
 fn map_button(b: u8) -> PointerButton {
     match b {
         1 => PointerButton::Right,
@@ -461,6 +518,14 @@ pub fn decode_host_message(payload: &[u8]) -> Result<JsValue, JsValue> {
         HostMessage::GameArea { x, y, w, h } => HostMsgJs::GameArea { x, y, w, h },
         HostMessage::DirectAnswer(sdp) => HostMsgJs::DirectAnswer { sdp },
         HostMessage::DirectUnavailable => HostMsgJs::DirectUnavailable,
+        HostMessage::FileOffer { id, name, size } => HostMsgJs::FileOffer { id, name, size: size as f64 },
+        HostMessage::FileChunk { id, offset, data } => {
+            // Chunk bytes go back as their own typed array, not through serde
+            // (which would base64 or array-of-numbers them) — see the
+            // `js_sys::Uint8Array` field handling in the caller.
+            return Ok(file_chunk_js(id, offset as f64, &data));
+        }
+        HostMessage::FileDone { id } => HostMsgJs::FileDone { id },
         HostMessage::Displays(d) => HostMsgJs::Displays {
             displays: d
                 .into_iter()
@@ -494,6 +559,26 @@ enum HostMsgJs {
     DirectAnswer { sdp: String },
     /// `kind: "directunavailable"`
     DirectUnavailable,
+    /// `kind: "fileoffer"` — the host wants to send a file to this device.
+    FileOffer { id: u32, name: String, size: f64 },
+    /// `kind: "filedone"`
+    FileDone { id: u32 },
+}
+
+/// A `HostMessage::FileChunk`'s bytes go out as a real `Uint8Array` rather
+/// than through `serde_wasm_bindgen` (which would turn them into a JSON array
+/// of numbers) — file chunks are the one payload here big enough for that to
+/// matter.
+fn file_chunk_js(id: u32, offset: f64, data: &[u8]) -> JsValue {
+    let obj = js_sys::Object::new();
+    let set = |k: &str, v: &JsValue| {
+        let _ = js_sys::Reflect::set(&obj, &jss(k), v);
+    };
+    set("kind", &jss("filechunk"));
+    set("id", &JsValue::from_f64(id as f64));
+    set("offset", &JsValue::from_f64(offset));
+    set("data", &js_sys::Uint8Array::from(data));
+    obj.into()
 }
 
 #[derive(Serialize)]

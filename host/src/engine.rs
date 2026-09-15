@@ -5,6 +5,7 @@
 //! at the rendezvous relay so clients on other networks can reach it. One
 //! session runs at a time. When idle its cost is a per-minute heartbeat.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,6 +34,11 @@ pub enum CoreCommand {
     DisconnectAll,
     /// Clear the remembered-device list (they can still connect with the PC ID).
     ForgetPaired,
+    /// Send a file to the currently connected device, if any.
+    SendFileToClient(PathBuf),
+    /// Download the given URL (a `latest.json` `downloadUrl`) and install it
+    /// silently, then restart into it.
+    InstallUpdate(String),
     Shutdown,
 }
 
@@ -64,9 +70,12 @@ pub struct CoreStatus {
     pub relay_online: Arc<AtomicBool>,
     /// Number of remembered (paired) devices.
     pub paired_count: usize,
-    /// `Some((version, download_url, notes))` once the update checker finds a
-    /// newer release. Never populated unless `update.check_url` is configured.
-    pub update_available: Option<(String, String, String)>,
+    /// `Some((version, release_url, notes, installer_url))` once the update
+    /// checker finds a newer release. `installer_url` is empty when the
+    /// manifest didn't provide one (older manifest, or a hand-edited one) —
+    /// there's just no one-click install to offer then. Never populated
+    /// unless `update.check_url` is configured.
+    pub update_available: Option<(String, String, String, String)>,
     /// The connected device, while a session is running.
     pub session: Option<SessionInfo>,
 }
@@ -107,6 +116,7 @@ pub async fn run(
     let mut relay_stop: Option<watch::Sender<bool>> = None;
     let mut session_task: Option<JoinHandle<()>> = None;
     let mut session_stop: Option<watch::Sender<bool>> = None;
+    let mut session_cmd_tx: Option<mpsc::UnboundedSender<session::SessionCommand>> = None;
     let mut update_rx = crate::update::spawn(paths.clone());
 
     apply_listening_state(
@@ -125,6 +135,7 @@ pub async fn run(
         &mut relay_stop,
         &mut status,
     );
+    crate::platform::power::set_prevent_sleep(settings.power.prevent_sleep);
     publish(&status_tx, &status);
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(60));
@@ -138,7 +149,7 @@ pub async fn run(
 
             Ok(()) = update_rx.changed() => {
                 if let Some(info) = update_rx.borrow().clone() {
-                    status.update_available = Some((info.version, info.url, info.notes));
+                    status.update_available = Some((info.version, info.url, info.notes, info.download_url));
                     publish(&status_tx, &status);
                 }
             }
@@ -151,7 +162,7 @@ pub async fn run(
                     Ok((sess, peer)) => {
                         begin_session(
                             sess, peer.to_string(), host_static, &device_id, &settings, &mut paired,
-                            &mut status, &status_tx, &mut session_task, &mut session_stop,
+                            &mut status, &status_tx, &mut session_task, &mut session_stop, &mut session_cmd_tx,
                         ).await;
                     }
                     Err(e) => tracing::warn!(error = %e, "LAN accept/handshake failed"),
@@ -175,7 +186,7 @@ pub async fn run(
                         Ok(Ok(sess)) => {
                             begin_session(
                                 sess, "via relay".to_string(), host_static, &device_id, &settings, &mut paired,
-                                &mut status, &status_tx, &mut session_task, &mut session_stop,
+                                &mut status, &status_tx, &mut session_task, &mut session_stop, &mut session_cmd_tx,
                             ).await;
                         }
                         Ok(Err(e)) => tracing::warn!(error = %e, "relayed handshake failed"),
@@ -189,6 +200,7 @@ pub async fn run(
                 tracing::info!("session task finished");
                 session_task = None;
                 session_stop = None;
+                session_cmd_tx = None;
                 status.sessions = 0;
                 status.session = None;
                 status.state = if listener.is_some() {
@@ -210,6 +222,9 @@ pub async fn run(
                             let re_relay = new.enable_remote_access != settings.enable_remote_access
                                 || new.network.signaling_url != settings.network.signaling_url
                                 || new.network.relay_key != settings.network.relay_key;
+                            if new.power.prevent_sleep != settings.power.prevent_sleep {
+                                crate::platform::power::set_prevent_sleep(new.power.prevent_sleep);
+                            }
                             settings = new;
                             if session_task.is_none() {
                                 if relisten {
@@ -248,8 +263,27 @@ pub async fn run(
                     tracing::info!("all paired devices revoked");
                     publish(&status_tx, &status);
                 }
+                Some(CoreCommand::SendFileToClient(path)) => {
+                    match &session_cmd_tx {
+                        Some(tx) => { let _ = tx.send(session::SessionCommand::SendFile(path)); }
+                        None => tracing::info!("send file requested, but nothing is connected"),
+                    }
+                }
+                Some(CoreCommand::InstallUpdate(download_url)) => {
+                    tokio::spawn(async move {
+                        match tokio::task::spawn_blocking(move || crate::update::apply_update(&download_url)).await {
+                            Ok(Ok(())) => {
+                                tracing::info!("update downloaded; restarting to install it");
+                                crate::platform::message_window::post_command(crate::platform::tray::ID_EXIT);
+                            }
+                            Ok(Err(e)) => tracing::warn!(error = ?e, "installing the update failed"),
+                            Err(e) => tracing::warn!(error = ?e, "update install task panicked"),
+                        }
+                    });
+                }
                 Some(CoreCommand::Shutdown) | None => {
                     tracing::info!("core shutting down");
+                    crate::platform::power::set_prevent_sleep(false);
                     if let Some(s) = &relay_stop { let _ = s.send(true); }
                     if let Some(stop) = &session_stop { let _ = stop.send(true); }
                     if let Some(task) = session_task.take() {
@@ -278,6 +312,7 @@ async fn begin_session(
     status_tx: &watch::Sender<CoreStatus>,
     session_task: &mut Option<JoinHandle<()>>,
     session_stop: &mut Option<watch::Sender<bool>>,
+    session_cmd_tx: &mut Option<mpsc::UnboundedSender<session::SessionCommand>>,
 ) {
     let peer_key = sess.peer_key();
     let key_id = rc_crypto::DeviceIdentity::key_short_id(&peer_key);
@@ -306,15 +341,20 @@ async fn begin_session(
         mode: settings.performance.mode,
         clipboard_sync: settings.security.clipboard_sync,
         audio: settings.audio.enabled,
+        mic: settings.mic.enabled,
+        uncap_fps_on_direct: settings.performance.uncap_fps_on_direct,
+        multi_monitor: settings.display.multi_monitor,
         host_static,
         device_id: device_id.to_string(),
         peer_key,
     };
     let stats = Arc::new(session::LiveStats::default());
     let task_stats = stats.clone();
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    *session_cmd_tx = Some(cmd_tx);
     *session_stop = Some(stop_tx);
     *session_task = Some(tokio::spawn(async move {
-        if let Err(e) = session::run(sess, params, stop_rx, task_stats).await {
+        if let Err(e) = session::run(sess, params, stop_rx, cmd_rx, task_stats).await {
             tracing::error!(error = ?e, "session ended with error");
         }
     }));

@@ -4,6 +4,8 @@
 //! The "require confirmation" prompt is still to come; the GPU-only
 //! capture→encode path is milestone 6.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -17,7 +19,60 @@ use rc_input::{Injector, Rect};
 use rc_protocol::{ClientMessage, DisplayInfo, HostMessage, InputEvent, QualityMode};
 use rc_transport::lan::LanSession;
 use rc_transport::{EncodedFrame, Session};
-use tokio::sync::watch;
+use tokio::io::AsyncReadExt;
+use tokio::sync::{mpsc, watch};
+
+use crate::display::{self, MultiMonitorMode};
+use crate::gamepad::GamepadHub;
+
+/// Host-initiated actions a running session accepts from outside its own
+/// control loop — right now just "send this file to the connected device"
+/// (the dashboard's "Send file to phone").
+pub enum SessionCommand {
+    SendFile(PathBuf),
+}
+
+/// Reject a device→PC file offer larger than this outright, before any of it
+/// is written to disk.
+const MAX_INCOMING_FILE: u64 = 500 * 1024 * 1024;
+
+/// One file transfer in progress from the connected device.
+struct IncomingFile {
+    file: std::fs::File,
+    name: String,
+    path: PathBuf,
+    written: u64,
+    total: u64,
+}
+
+/// `%USERPROFILE%\Downloads\RemoteControl` — created on first use.
+fn incoming_files_dir() -> Result<PathBuf> {
+    let base = std::env::var_os("USERPROFILE").context("no USERPROFILE")?;
+    let dir = PathBuf::from(base).join("Downloads").join("RemoteControl");
+    std::fs::create_dir_all(&dir).context("creating the downloads folder")?;
+    Ok(dir)
+}
+
+/// A path under `dir` for `name` that doesn't already exist — `name` itself
+/// stripped to just its file name (no directories a malicious/buggy client
+/// could use to escape `dir`), with " (2)", " (3)", … appended on collision.
+fn unique_download_path(dir: &Path, name: &str) -> PathBuf {
+    let leaf = Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("file");
+    let leaf_path = Path::new(leaf);
+    let stem = leaf_path.file_stem().and_then(|s| s.to_str()).unwrap_or("file").to_string();
+    let ext = leaf_path.extension().and_then(|s| s.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+    let mut candidate = dir.join(leaf);
+    let mut n = 2;
+    while candidate.exists() {
+        candidate = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    candidate
+}
 
 /// Tunables for a session, taken from host settings. (Not `Debug`: it holds
 /// the host's secret key.)
@@ -33,6 +88,12 @@ pub struct SessionParams {
     pub clipboard_sync: bool,
     /// Stream the PC's sound.
     pub audio: bool,
+    /// Play the connected device's microphone on this PC (see `rc_audio::render`).
+    pub mic: bool,
+    /// Double the frame rate target once the session is on a direct path.
+    pub uncap_fps_on_direct: bool,
+    /// How to handle a PC with more than one monitor for this session.
+    pub multi_monitor: MultiMonitorMode,
     /// This host's static key and PC ID — what a direct path's handshake needs.
     pub host_static: [u8; 32],
     pub device_id: String,
@@ -137,12 +198,17 @@ pub async fn run(
     session: LanSession,
     params: SessionParams,
     mut stop: watch::Receiver<bool>,
+    mut commands: mpsc::UnboundedReceiver<SessionCommand>,
     stats: Arc<LiveStats>,
 ) -> Result<()> {
     // The path the device connected over, kept to fall back to if a direct
     // path is set up and later lost.
     let relay = Arc::new(session);
     let link = Arc::new(Link::new(relay.clone()));
+
+    // A PC with more than one monitor: mirror or move windows for the
+    // session, undone in the teardown block below.
+    let monitor_restore = display::apply(params.multi_monitor);
 
     // ── capture thread: reports geometry, then waits for the encoder ─────────
     let capture_stop = Arc::new(AtomicBool::new(false));
@@ -159,10 +225,14 @@ pub async fn run(
     });
     let cap_stop = capture_stop.clone();
     let cap_gate = gate.clone();
-    let cap_fps = params.fps;
+    // Read fresh every frame by the capture loop, so switching to a direct
+    // path (see `uncap_fps_on_direct`) can raise the target without
+    // restarting the thread.
+    let target_fps = Arc::new(AtomicU32::new(params.fps.clamp(5, 240)));
+    let cap_fps = target_fps.clone();
     let capture_thread = std::thread::Builder::new()
         .name("rc-capture".into())
-        .spawn(move || capture_loop(cap_fps, &geo_tx, &enc_rx, &cap_stop, &cap_gate))
+        .spawn(move || capture_loop(&cap_fps, &geo_tx, &enc_rx, &cap_stop, &cap_gate))
         .context("spawn capture thread")?;
 
     let (width, height, rect) = geo_rx
@@ -331,7 +401,8 @@ pub async fn run(
     // client's keyframe request actually need — reuse the one mechanism for
     // both instead of teaching the encoder a separate "force an IDR" path.
     let recreate_encoder = |mode: QualityMode| -> Option<EncodeConfig> {
-        let cfg = quality_config(mode, width, height, params.fps, params.max_bitrate_kbps);
+        let fps = target_fps.load(Ordering::Relaxed);
+        let cfg = quality_config(mode, width, height, fps, params.max_bitrate_kbps);
         match StreamEncoder::new(cfg, pkt_tx.clone()) {
             Ok(new_encoder) => {
                 stats.hardware_encoder.store(new_encoder.is_hardware(), Ordering::Relaxed);
@@ -366,6 +437,23 @@ pub async fn run(
     let mut pending: Option<Arc<LanSession>> = None;
     let mut on_direct = false;
 
+    // ── controller passthrough ────────────────────────────────────────────
+    let mut gamepad = GamepadHub::new();
+
+    // ── incoming files (device → PC) ──────────────────────────────────────
+    let mut incoming_files: HashMap<u32, IncomingFile> = HashMap::new();
+
+    // ── mic playback (device → PC) ─────────────────────────────────────────
+    let mic_stop = Arc::new(AtomicBool::new(false));
+    let (mic_render_tx, mic_render_rx) = std_mpsc::sync_channel::<rc_audio::render::MicPacket>(8);
+    if params.mic {
+        let ms = mic_stop.clone();
+        std::thread::Builder::new()
+            .name("rc-mic".into())
+            .spawn(move || rc_audio::render_mic(&ms, &mic_render_rx))
+            .ok();
+    }
+
     let reason;
     loop {
         let release_due = injector.next_release_due();
@@ -373,7 +461,7 @@ pub async fn run(
         tokio::select! {
             r = cur.control().recv() => match r {
                 Ok(bytes) => {
-                    match handle_client_msg(&bytes, &mut injector, clipboard.as_ref(), &link).await {
+                    match handle_client_msg(&bytes, &mut injector, clipboard.as_ref(), &link, &mut gamepad, &mut incoming_files).await {
                         ClientAction::Input => {
                             stats.input_events.fetch_add(1, Ordering::Relaxed);
                         }
@@ -389,7 +477,7 @@ pub async fn run(
                             }
                         }
                         ClientAction::DirectOffer(sdp) => {
-                            offer_direct(&sdp, &link, &params, &direct_tx).await;
+                            tokio::spawn(offer_direct(sdp, link.clone(), params.clone(), direct_tx.clone()));
                         }
                         ClientAction::None => {}
                     }
@@ -402,6 +490,7 @@ pub async fn run(
                         link.set(relay.clone());
                         on_direct = false;
                         stats.direct.store(false, Ordering::Relaxed);
+                        target_fps.store(params.fps.clamp(5, 240), Ordering::Relaxed);
                         recreate_encoder(current_mode);
                         continue;
                     }
@@ -416,6 +505,9 @@ pub async fn run(
                             link.set(direct);
                             on_direct = true;
                             stats.direct.store(true, Ordering::Relaxed);
+                            if params.uncap_fps_on_direct {
+                                target_fps.store((params.fps.clamp(5, 240) * 2).min(120), Ordering::Relaxed);
+                            }
                             tracing::info!("switched to a direct connection");
                             recreate_encoder(current_mode);
                         }
@@ -428,6 +520,18 @@ pub async fn run(
                 Ok(sess) if sess.peer_key() == params.peer_key => pending = Some(Arc::new(sess)),
                 Ok(_) => tracing::warn!("a direct path authenticated a different device; ignored"),
                 Err(e) => tracing::info!(error = %e, "direct connection didn't come up; staying on the relay"),
+            },
+            mic = cur.recv_mic(), if params.mic => {
+                if let Ok(packet) = mic {
+                    if let Some(d) = rc_audio::adpcm::decode(&packet) {
+                        let _ = mic_render_tx.try_send((d.samples, d.sample_rate, d.channels));
+                    }
+                }
+            }
+            Some(cmd) = commands.recv() => match cmd {
+                SessionCommand::SendFile(path) => {
+                    tokio::spawn(send_file_to_client(link.clone(), path));
+                }
             },
             _ = keyframe_poll.tick() => {
                 if cur.video().take_key_frame_request() {
@@ -537,24 +641,69 @@ pub async fn run(
     capture_stop.store(true, Ordering::SeqCst);
     clip_stop.store(true, Ordering::SeqCst);
     audio_stop.store(true, Ordering::SeqCst);
+    mic_stop.store(true, Ordering::SeqCst);
     let _ = capture_thread.join();
     drop(encoder_slot); // last ref → flushes and joins the encoder thread
     injector.release_all();
+    gamepad.disconnect();
+    display::undo(monitor_restore);
     video_task.abort();
     link.send(&HostMessage::Disconnect { reason }).await;
     Ok(())
+}
+
+/// Send a file to the connected device: an offer, then chunks, then done. The
+/// device shows a download once it sees `FileDone`. Runs detached so a large
+/// file doesn't hold up the control loop; errors just end the transfer quietly
+/// (the device already knows the session if the link itself dropped).
+async fn send_file_to_client(link: Arc<Link>, path: PathBuf) {
+    const CHUNK: usize = 32 * 1024;
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("file").to_string();
+    let meta = match tokio::fs::metadata(&path).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "can't send file: reading its metadata failed");
+            return;
+        }
+    };
+    let mut file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "can't send file: opening it failed");
+            return;
+        }
+    };
+    let id = rand::random::<u32>();
+    let size = meta.len();
+    link.send(&HostMessage::FileOffer { id, name: name.clone(), size }).await;
+    let mut sent = 0u64;
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = match file.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(error = %e, "sending file failed mid-transfer");
+                return;
+            }
+        };
+        link.send(&HostMessage::FileChunk { id, offset: sent, data: buf[..n].to_vec() }).await;
+        sent += n as u64;
+    }
+    link.send(&HostMessage::FileDone { id }).await;
+    tracing::info!(name, size, "sent file to the connected device");
 }
 
 /// Answer a device's offer of a direct path. The answer goes back over the
 /// current link; the direct session — once its own handshake completes, or
 /// fails — arrives on `direct_tx`.
 async fn offer_direct(
-    sdp: &str,
-    link: &Link,
-    params: &SessionParams,
-    direct_tx: &tokio::sync::mpsc::UnboundedSender<Result<LanSession>>,
+    sdp: String,
+    link: Arc<Link>,
+    params: SessionParams,
+    direct_tx: tokio::sync::mpsc::UnboundedSender<Result<LanSession>>,
 ) {
-    match crate::direct::accept(sdp) {
+    match crate::direct::accept(&sdp).await {
         Ok((answer, stream)) => {
             link.send(&HostMessage::DirectAnswer(answer)).await;
             let tx = direct_tx.clone();
@@ -587,11 +736,14 @@ enum ClientAction {
     DirectOffer(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_client_msg(
     bytes: &[u8],
     injector: &mut Injector,
     clipboard: Option<&Arc<StdMutex<ClipboardWatcher>>>,
     link: &Link,
+    gamepad: &mut GamepadHub,
+    incoming: &mut HashMap<u32, IncomingFile>,
 ) -> ClientAction {
     match rc_protocol::decode::<ClientMessage>(bytes) {
         Ok(ClientMessage::Input(ev)) => {
@@ -625,13 +777,71 @@ async fn handle_client_msg(
         Ok(ClientMessage::Disconnect) => {
             tracing::info!("client requested disconnect");
         }
+        Ok(ClientMessage::GamepadState {
+            buttons,
+            left_trigger,
+            right_trigger,
+            thumb_lx,
+            thumb_ly,
+            thumb_rx,
+            thumb_ry,
+        }) => {
+            if let Some(notice) = gamepad.update(buttons, left_trigger, right_trigger, thumb_lx, thumb_ly, thumb_rx, thumb_ry) {
+                link.send(&HostMessage::Notice(notice)).await;
+            }
+            return ClientAction::Input;
+        }
+        Ok(ClientMessage::GamepadDisconnect) => gamepad.disconnect(),
+        Ok(ClientMessage::FileOffer { id, name, size }) => {
+            if size > MAX_INCOMING_FILE {
+                link.send(&HostMessage::Notice(format!("\"{name}\" is too large to receive (over 500 MB)"))).await;
+                return ClientAction::None;
+            }
+            match incoming_files_dir().and_then(|dir| {
+                let path = unique_download_path(&dir, &name);
+                std::fs::File::create(&path).map(|file| (file, path)).context("creating the file")
+            }) {
+                Ok((file, path)) => {
+                    tracing::info!(name, size, path = %path.display(), "receiving a file from the connected device");
+                    incoming.insert(id, IncomingFile { file, name, path, written: 0, total: size });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, name, "couldn't start receiving file");
+                    link.send(&HostMessage::Notice(format!("Couldn't save \"{name}\": {e}"))).await;
+                }
+            }
+        }
+        Ok(ClientMessage::FileChunk { id, data, .. }) => {
+            if let Some(f) = incoming.get_mut(&id) {
+                use std::io::Write;
+                if let Err(e) = f.file.write_all(&data) {
+                    tracing::warn!(error = %e, name = %f.name, "writing received file failed");
+                    incoming.remove(&id);
+                } else {
+                    f.written += data.len() as u64;
+                }
+            }
+        }
+        Ok(ClientMessage::FileDone { id }) => {
+            if let Some(f) = incoming.remove(&id) {
+                let ok = f.written >= f.total;
+                tracing::info!(name = %f.name, bytes = f.written, complete = ok, "file received");
+                let text = if ok {
+                    format!("Received \"{}\" — saved to Downloads\\RemoteControl", f.name)
+                } else {
+                    format!("\"{}\" arrived incomplete and was kept anyway", f.name)
+                };
+                link.send(&HostMessage::Notice(text)).await;
+                let _ = f.path; // kept on disk either way; nothing further to do with the handle
+            }
+        }
         Err(e) => tracing::warn!(error = %e, "undecodable control message"),
     }
     ClientAction::None
 }
 
 fn capture_loop(
-    fps: u32,
+    target_fps: &AtomicU32,
     geo_tx: &std_mpsc::Sender<Result<(u32, u32, DesktopRect)>>,
     enc_rx: &std_mpsc::Receiver<Arc<StdMutex<Arc<StreamEncoder>>>>,
     stop: &AtomicBool,
@@ -663,7 +873,8 @@ fn capture_loop(
         Err(_) => return,
     };
 
-    let frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
+    let mut fps = target_fps.load(Ordering::Relaxed).max(1);
+    let mut frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
     let mut next = Instant::now();
     let mut ts_us: u64 = 0;
     let mut last: Option<Vec<u8>> = None;
@@ -671,6 +882,14 @@ fn capture_loop(
     let mut last_submit = Instant::now() - Duration::from_secs(1);
 
     while !stop.load(Ordering::SeqCst) {
+        // Picked up on every iteration so a mid-session change (switching to
+        // or from a direct path — see `uncap_fps_on_direct`) takes effect
+        // without restarting this thread.
+        let new_fps = target_fps.load(Ordering::Relaxed).max(1);
+        if new_fps != fps {
+            fps = new_fps;
+            frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
+        }
         // Pace *first*, then grab, then submit immediately. Grabbing before
         // the wait (as this did originally) meant every frame sat around for
         // up to a full frame period — 33ms at 30fps — going stale between

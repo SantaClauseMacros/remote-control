@@ -90,6 +90,12 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--autostart"; Flags: nowait postinstall skipifsilent runasoriginaluser; Description: "Launch {#MyAppName} now"; Check: not IsTaskSelected('autostart')
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--autostart --enable-autostart"; Flags: nowait postinstall skipifsilent runasoriginaluser; Description: "Launch {#MyAppName} now"; Check: IsTaskSelected('autostart')
 Filename: "{#MyAppURL}#set-it-up-in-3-minutes"; Flags: postinstall shellexec skipifsilent unchecked; Description: "Open the setup guide (how to connect from your phone)"
+; The two entries above are `skipifsilent` — right for a normal install, but
+; a silent one (the in-app "Install update" flow, `rc_host::update::apply_update`)
+; needs the app relaunched anyway, just without flashing a checkbox/prompt
+; nobody's there to see. `WizardSilent` is only true for /SILENT or
+; /VERYSILENT, so this never double-launches an interactive install.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--autostart"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [Code]
 function IsTaskSelected(const TaskName: String): Boolean;

@@ -172,7 +172,10 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
 
     <div class="banner" id="banner-update" hidden>
       <div><b>Update available — <span id="upd-ver"></span></b><div class="dim small" id="upd-notes"></div></div>
-      <button class="btn primary" id="btn-update">Download</button>
+      <div class="row">
+        <button class="btn primary" id="btn-install-update" hidden>Install now</button>
+        <button class="btn" id="btn-update">Release notes</button>
+      </div>
     </div>
     <div class="banner warn" id="banner-off" hidden>
       <div><b>Remote access is off</b><div class="dim small">No device can connect until you turn it back on.</div></div>
@@ -221,6 +224,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
             <span class="chip" id="chip-enc"></span>
             <span class="chip" id="chip-game" hidden>🎮 A game has the mouse</span>
           </div>
+          <div class="row" style="margin-top:12px"><button class="btn sm" data-action="sendFile">Send a file to this device</button></div>
         </div>
       </div>
 
@@ -292,9 +296,23 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
     <div class="card">
       <h2>Features</h2>
       <label class="set-row"><div class="txt"><b>Stream sound</b><span class="dim small">Play this PC's sound on the connected device (applies to the next connection)</span></div><input type="checkbox" class="switch" data-setting="streamAudio"></label>
+      <label class="set-row"><div class="txt"><b>Microphone</b><span class="dim small">Let a connected device's microphone play on this PC. Without a virtual audio cable installed, it plays out loud on your speakers rather than being usable as a mic elsewhere — see the README.</span></div><input type="checkbox" class="switch" data-setting="micEnabled"></label>
       <label class="set-row"><div class="txt"><b>Clipboard sync</b><span class="dim small">Share copied text both ways while connected</span></div><input type="checkbox" class="switch" data-setting="clipboardSync"></label>
       <label class="set-row"><div class="txt"><b>Show on local network</b><span class="dim small">Lets the desktop viewer find this PC by name</span></div><input type="checkbox" class="switch" data-setting="lanDiscovery"></label>
       <label class="set-row"><div class="txt"><b>Check for updates</b><span class="dim small">Get a notification when a new version is out</span></div><input type="checkbox" class="switch" data-setting="updateChecks"></label>
+      <label class="set-row"><div class="txt"><b>Keep this PC awake</b><span class="dim small">Stops it sleeping while Remote Control is running, so it's still reachable if you're away for a while</span></div><input type="checkbox" class="switch" data-setting="preventSleep"></label>
+      <label class="set-row"><div class="txt"><b>60&nbsp;FPS boost on direct connections</b><span class="dim small">Doubles the frame rate once a session switches to ⚡ direct (same-network) — that link usually has room for it</span></div><input type="checkbox" class="switch" data-setting="uncapFpsOnDirect"></label>
+    </div>
+
+    <div class="card" id="card-displays" hidden>
+      <h2>Multiple monitors</h2>
+      <div class="set-row"><div class="txt"><b>While someone's connected</b><span class="dim small">A session only ever shows your primary display — this fills in the rest, for the duration of the connection</span></div>
+        <select data-setting="multiMonitor">
+          <option value="ignore">Do nothing</option>
+          <option value="duplicate">Duplicate displays onto the primary one</option>
+          <option value="moveToMain">Move windows onto the primary monitor</option>
+        </select>
+      </div>
     </div>
 
     <div class="card">
@@ -518,6 +536,7 @@ function renderStatus() {
     $('#upd-ver').textContent = 'v' + s.update.version;
     $('#upd-notes').textContent = s.update.notes || '';
     $('#about-update').textContent = `v${s.update.version} available`;
+    $('#btn-install-update').hidden = !s.update.downloadUrl;
   } else {
     $('#about-update').textContent = s.updateChecks ? "You're up to date" : 'Update checks are off';
   }
@@ -596,6 +615,7 @@ function fillSettings() {
     else el.value = v == null ? '' : String(v);
   }
   $$('[data-setting="updateChecks"]').forEach(el => { el.disabled = !settings.updateChecksAvailable; });
+  $('#card-displays').hidden = (settings.monitorCount || 1) < 2;
 }
 function syncQuickSwitches() {
   if (!settings) return;
@@ -689,6 +709,11 @@ $('#btn-copy-id').onclick = () => status && copyText(status.deviceId, 'PC ID');
 $('#btn-copy-link').onclick = () => status && status.phoneLink && copyText(status.phoneLink, 'Phone link');
 $('#btn-open-web').onclick = () => status && status.webApp && window.open(status.webApp, '_blank');
 $('#btn-update').onclick = () => status && status.update && window.open(status.update.url, '_blank');
+$('#btn-install-update').onclick = async () => {
+  if (!status || !status.update) return;
+  if (!await confirmBox(`Install v${status.update.version}?`, 'Remote Control will restart itself in a few seconds. Any connected device will be disconnected briefly.', 'Install')) return;
+  action('installUpdate');
+};
 $('#btn-turn-on').onclick = () => saveSetting('enableRemoteAccess', true);
 $('#btn-disconnect').onclick = async () => {
   if (await confirmBox('Disconnect this device?', 'It can reconnect any time using your PC ID.', 'Disconnect')) action('disconnect');

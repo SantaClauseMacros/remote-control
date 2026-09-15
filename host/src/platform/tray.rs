@@ -52,6 +52,7 @@ const ID_DOWNLOAD_UPDATE: usize = 9;
 pub(crate) const ID_RESTART_ELEVATED: usize = 10;
 const ID_COPY_PHONE_LINK: usize = 11;
 const ID_OPEN_APP: usize = 12;
+const ID_INSTALL_UPDATE: usize = 13;
 pub(crate) const ID_EXIT: usize = 7;
 
 /// Timer that refreshes the tray tooltip / fires connect notifications.
@@ -285,7 +286,7 @@ unsafe fn handle_command(hwnd: HWND, id: usize) {
             }
         }
         ID_DOWNLOAD_UPDATE => {
-            if let Some((_, url, _)) = ctx.status.borrow().update_available.clone() {
+            if let Some((_, url, _, _)) = ctx.status.borrow().update_available.clone() {
                 let target = HSTRING::from(url);
                 let _ = ShellExecuteW(
                     hwnd,
@@ -295,6 +296,14 @@ unsafe fn handle_command(hwnd: HWND, id: usize) {
                     PCWSTR::null(),
                     SW_SHOWNORMAL,
                 );
+            }
+        }
+        ID_INSTALL_UPDATE => {
+            if let Some((_, _, _, download_url)) = ctx.status.borrow().update_available.clone() {
+                if !download_url.is_empty() {
+                    let _ = ctx.core_tx.send(CoreCommand::InstallUpdate(download_url));
+                    balloon(hwnd, "Installing update", "Downloading the update. Remote Control will restart in a moment.");
+                }
             }
         }
         ID_RESTART_ELEVATED => restart_elevated(hwnd, ctx),
@@ -355,7 +364,7 @@ unsafe fn refresh_status_ui(hwnd: HWND) {
     let Some(ctx) = context(hwnd) else { return };
     let status = ctx.status.borrow().clone();
 
-    if let Some((version, _, notes)) = &status.update_available {
+    if let Some((version, _, notes, _)) = &status.update_available {
         let already = UPDATE_NOTIFIED.with(|n| n.replace(true));
         if !already {
             let body = if notes.is_empty() {
@@ -575,12 +584,20 @@ unsafe fn show_menu(hwnd: HWND) {
         );
     }
 
-    if let Some((version, _, _)) = &status.update_available {
+    if let Some((version, _, _, download_url)) = &status.update_available {
+        if !download_url.is_empty() {
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING,
+                ID_INSTALL_UPDATE,
+                &HSTRING::from(format!("Update available: v{version} — Install now")),
+            );
+        }
         let _ = AppendMenuW(
             menu,
             MF_STRING,
             ID_DOWNLOAD_UPDATE,
-            &HSTRING::from(format!("Update available: v{version} — Download")),
+            &HSTRING::from(format!("v{version} release notes")),
         );
     }
 

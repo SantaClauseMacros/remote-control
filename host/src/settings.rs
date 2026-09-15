@@ -11,6 +11,8 @@ use anyhow::{Context, Result};
 use rc_protocol::QualityMode;
 use serde::{Deserialize, Serialize};
 
+pub use crate::display::MultiMonitorMode;
+
 /// Relay a fresh install parks at, so a PC is reachable from the web app with
 /// no setup. Override at build time with `RC_DEFAULT_RELAY`; a
 /// `network.signaling_url` already in config.toml always wins.
@@ -34,6 +36,37 @@ pub struct Settings {
     pub security: SecuritySettings,
     pub update: UpdateSettings,
     pub audio: AudioSettings,
+    pub mic: MicSettings,
+    pub power: PowerSettings,
+    pub display: DisplaySettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MicSettings {
+    /// Play the connected device's microphone on this PC. Off by default: it
+    /// needs a one-time mic permission on the device, and — without a virtual
+    /// audio cable installed (see the README) — it plays out loud on this
+    /// PC's speakers rather than being usable as a mic in Discord, a game,
+    /// etc, which would be a surprise to turn on silently.
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PowerSettings {
+    /// Keep this PC from sleeping while Remote Control is running, so it's
+    /// still reachable if nobody touches it for a while. Off by default —
+    /// most people don't want their PC awake all night for this.
+    pub prevent_sleep: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplaySettings {
+    /// How to handle a PC with more than one monitor for a session — see
+    /// `crate::display`.
+    pub multi_monitor: MultiMonitorMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +92,11 @@ pub struct PerformanceSettings {
     pub max_bitrate_kbps: u32,
     /// Prefer a GPU encoder (NVENC / AMF / QSV) when one is available.
     pub use_hardware_encoder: bool,
+    /// Once a session is on a direct (same-network) path, double the frame
+    /// rate target — a direct link usually has plenty of headroom, so this is
+    /// where a game actually benefits from more than 30-60 FPS. Ignored on
+    /// the relay, which is exactly the link this can't help.
+    pub uncap_fps_on_direct: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +161,9 @@ impl Default for Settings {
             security: SecuritySettings::default(),
             update: UpdateSettings::default(),
             audio: AudioSettings::default(),
+            mic: MicSettings::default(),
+            power: PowerSettings::default(),
+            display: DisplaySettings::default(),
         }
     }
 }
@@ -148,6 +189,7 @@ impl Default for PerformanceSettings {
             max_fps: 60,
             max_bitrate_kbps: 0,
             use_hardware_encoder: true,
+            uncap_fps_on_direct: true,
         }
     }
 }

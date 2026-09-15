@@ -1,14 +1,19 @@
-//! Optional update checker.
+//! Optional update checker, plus the one-click installer it can trigger.
 //!
 //! Fetches a small JSON manifest from `settings.update.check_url` on a
 //! timer, compares its `version` against the running build, and — if newer —
-//! surfaces it in the tray. It never downloads or runs anything itself: the
-//! user clicks through to the download page/installer in their browser, so
-//! there is no self-modifying code and no silent binary replacement.
+//! surfaces it in the tray and dashboard. By itself this never downloads or
+//! runs anything: the user can always just click through to the download
+//! page/installer in their browser. [`apply_update`] is the opt-in one-click
+//! path (tray "Install update" / dashboard "Install now") — it downloads the
+//! installer the manifest points at and runs it silently, restarting into it.
 //!
 //! Disabled by default (`check_url: None`): a host that hasn't opted in makes
 //! no network calls for this at all.
 
+use std::io::Read;
+
+use anyhow::{ensure, Context, Result};
 use rc_common::AppPaths;
 use serde::Deserialize;
 use tokio::sync::watch;
@@ -19,10 +24,15 @@ use crate::settings::Settings;
 pub struct Manifest {
     /// e.g. `"0.2.0"`.
     pub version: String,
-    /// Where the user goes to get it (installer download or a releases page).
+    /// Where the user goes to get it by hand (a releases page).
     pub url: String,
     #[serde(default)]
     pub notes: String,
+    /// Direct link to the installer `.exe`, for the one-click in-app update.
+    /// Missing on an older or hand-edited manifest — that just means no
+    /// one-click button, `url` still works for a manual download.
+    #[serde(default, alias = "downloadUrl")]
+    pub download_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +40,7 @@ pub struct UpdateInfo {
     pub version: String,
     pub url: String,
     pub notes: String,
+    pub download_url: String,
 }
 
 /// Spawn the background checker. Returns a [`watch`] that publishes `Some`
@@ -83,7 +94,39 @@ fn check_once(url: &str) -> anyhow::Result<Option<UpdateInfo>> {
         version: manifest.version,
         url: manifest.url,
         notes: manifest.notes,
+        download_url: manifest.download_url,
     }))
+}
+
+/// Download the installer at `download_url` and launch it silently
+/// (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`). The installer's own
+/// `Check: WizardSilent` run entry relaunches the app afterward — see
+/// `installer/RemoteControl.iss`. Caller is expected to exit this process
+/// right after a successful call, the same way the installer's own
+/// `CloseApplications` would, just without needing that prompt.
+pub fn apply_update(download_url: &str) -> Result<()> {
+    ensure!(!download_url.is_empty(), "this update has no installer link");
+    let resp = ureq::get(download_url)
+        .timeout(std::time::Duration::from_secs(120))
+        .call()
+        .context("downloading the update")?;
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take(200_000_000) // sanity cap; the real installer is a few MB
+        .read_to_end(&mut buf)
+        .context("reading the downloaded update")?;
+    ensure!(buf.len() > 1_000_000, "the downloaded update looks too small to be real");
+    ensure!(buf.starts_with(b"MZ"), "the downloaded file isn't a Windows executable");
+
+    let path = std::env::temp_dir().join("RemoteControlSetup-update.exe");
+    std::fs::write(&path, &buf).context("saving the downloaded update")?;
+    tracing::info!(bytes = buf.len(), path = %path.display(), "update downloaded");
+
+    std::process::Command::new(&path)
+        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        .spawn()
+        .context("launching the installer")?;
+    Ok(())
 }
 
 /// Simple `major.minor.patch` comparison — good enough for our own releases,

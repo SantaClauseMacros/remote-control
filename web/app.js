@@ -3,6 +3,7 @@ import init, {
   enc_pointer_move, enc_pointer_delta, enc_pointer_button, enc_pointer_button_in_place,
   enc_scroll, enc_key, enc_text,
   enc_ping, enc_clipboard, enc_quality, enc_disconnect, enc_direct_offer, enc_direct_use,
+  enc_gamepad_state, enc_gamepad_disconnect, enc_file_offer, enc_file_chunk, enc_file_done,
   decode_host_message, parse_video_payload, avc_codec_string, is_keyframe,
   ack_ok, ack_host_offline, ack_bad_key,
 } from './pkg/rc_web.js';
@@ -102,6 +103,101 @@ function decodeAdpcm(u8) {
   return { channels, rate, frames, data };
 }
 
+/** One ADPCM sample step, mirroring `adpcm.rs`'s `State::encode` — advances
+ * `state` (`{ predictor, index }`) in place and returns the 4-bit code. */
+function adpcmEncodeStep(state, sample) {
+  const step = ADPCM_STEP[state.index];
+  let diff = sample - state.predictor, code = 0;
+  if (diff < 0) { code = 8; diff = -diff; }
+  let delta = step >> 3;
+  if (diff >= step) { code |= 4; diff -= step; delta += step; }
+  if (diff >= (step >> 1)) { code |= 2; diff -= step >> 1; delta += step >> 1; }
+  if (diff >= (step >> 2)) { code |= 1; delta += step >> 2; }
+  let p = (code & 8) ? state.predictor - delta : state.predictor + delta;
+  state.predictor = p < -32768 ? -32768 : p > 32767 ? 32767 : p;
+  const ix = state.index + ADPCM_INDEX[code & 7];
+  state.index = ix < 0 ? 0 : ix > 88 ? 88 : ix;
+  return code;
+}
+/** Encode mono 16-bit PCM into one packet matching `adpcm.rs`'s layout —
+ * `state` carries the codec forward across calls, same streaming design as
+ * the Rust encoder. Used for the mic, the one direction this app encodes
+ * ADPCM rather than only decoding it. */
+function encodeAdpcmMono(int16, rate, state) {
+  const frames = Math.min(int16.length, 65535);
+  const out = new Uint8Array(8 + 4 + Math.ceil(frames / 2));
+  const dv = new DataView(out.buffer);
+  out[0] = 1; out[1] = 1; // version, channels
+  dv.setUint32(2, rate, true);
+  dv.setUint16(6, frames, true);
+  dv.setInt16(8, state.predictor, true);
+  out[10] = state.index; out[11] = 0;
+  let pos = 12, low = null;
+  for (let i = 0; i < frames; i++) {
+    const code = adpcmEncodeStep(state, int16[i]);
+    if (low === null) low = code;
+    else { out[pos++] = low | (code << 4); low = null; }
+  }
+  if (low !== null) out[pos++] = low;
+  return out;
+}
+
+/** Capture this device's microphone and stream it to the PC as ADPCM
+ * packets. Plain `ScriptProcessorNode` rather than an AudioWorklet — it's
+ * deprecated but still works everywhere, including the older WebViews this
+ * app otherwise has to support, and mic audio has no real-time-thread
+ * pressure the way game audio would. */
+class MicCapture {
+  constructor(conn) {
+    this.conn = conn;
+    this.ctx = null;
+    this.node = null;
+    this.stream = null;
+  }
+  get active() { return !!this.node; }
+  async start() {
+    if (this.node) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+    } catch {
+      toast("Couldn't use the microphone — check its permission for this site", 2400);
+      store.settings = { ...store.settings, mic: false };
+      return;
+    }
+    this.stream = stream;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    this.ctx = new Ctx();
+    const state = { predictor: 0, index: 0 };
+    const src = this.ctx.createMediaStreamSource(stream);
+    this.node = this.ctx.createScriptProcessor(2048, 1, 1);
+    this.node.onaudioprocess = e => {
+      const input = e.inputBuffer.getChannelData(0);
+      const pcm = new Int16Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        const s = Math.max(-1, Math.min(1, input[i]));
+        pcm[i] = s < 0 ? s * 32768 : s * 32767;
+      }
+      this.conn.sendMic(encodeAdpcmMono(pcm, this.ctx.sampleRate, state));
+    };
+    src.connect(this.node);
+    // onaudioprocess only fires once the node is part of a live graph
+    // reaching the destination — route through a silent gain so the mic
+    // itself is never actually played back through the speakers.
+    const silence = this.ctx.createGain();
+    silence.gain.value = 0;
+    this.node.connect(silence);
+    silence.connect(this.ctx.destination);
+  }
+  stop() {
+    if (this.node) { this.node.disconnect(); this.node.onaudioprocess = null; this.node = null; }
+    if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
+    if (this.ctx) { this.ctx.close().catch(() => {}); this.ctx = null; }
+  }
+}
+
 class SoundPlayer {
   constructor() { this.ctx = null; this.gain = null; this.at = 0; }
   get muted() { return !!store.settings.muted; }
@@ -145,7 +241,7 @@ const store = {
   set devices(v) { localStorage.rc_devices = JSON.stringify(v); },
   get settings() {
     return Object.assign(
-      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true, muted: false, direct: true },
+      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true, muted: false, direct: true, mic: false },
       (() => { try { return JSON.parse(localStorage.rc_settings || '{}'); } catch { return {}; } })());
   },
   set settings(v) { localStorage.rc_settings = JSON.stringify(v); },
@@ -374,6 +470,14 @@ class Conn {
     if (this.phase !== 'live') return;
     try { const a = this._active(); a.send(a.sess.seal_control(controlBytes)); }
     catch (e) { this._fail(String(e)); }
+  }
+  /** One encoded microphone packet — same channel/session routing as `send`,
+   * just sealed for the mic channel instead of the control one. Silently
+   * dropped rather than failing the session: a lost mic packet is an
+   * inaudible gap, not worth tearing down the connection over. */
+  sendMic(packet) {
+    if (this.phase !== 'live') return;
+    try { const a = this._active(); a.send(a.sess.seal_mic(packet)); } catch {}
   }
   /** Ask the host to send a fresh keyframe (recovery from a decode error). */
   requestKeyframe() {
@@ -930,6 +1034,12 @@ class Viewer {
     this._bindControls();
     this._bindKeyboard();
     this._bindJoystick();
+    this._bindGamepad();
+    this._bindFiles();
+    this.mic = new MicCapture(this.conn);
+    this._syncMicButton();
+    if (store.settings.mic) this.mic.start();
+    this.incomingFiles = new Map(); // id → { name, size, chunks: Uint8Array[] }
     this._on(document, 'visibilitychange', () => { if (document.hidden) this._resetTouches(); });
     this._on(window, 'pagehide', () => this._resetTouches());
     const rotated = () => { this._resetTouches(); this._layoutPad(); };
@@ -999,6 +1109,9 @@ class Viewer {
       this.gameArea = { x: m.x, y: m.y, w: m.w, h: m.h };
       this._layoutPad();
     }
+    else if (m.kind === 'fileoffer') this._fileOffer(m);
+    else if (m.kind === 'filechunk') this._fileChunk(m);
+    else if (m.kind === 'filedone') this._fileDone(m);
   }
 
   /** A game on the host grabbed (or let go of) the mouse. While it holds it,
@@ -1036,6 +1149,7 @@ class Viewer {
     // added (see _ac in the constructor).
     this._releaseKeys && this._releaseKeys();
     this._ac.abort();
+    this.mic && this.mic.stop();
     if (this._lookPending) { cancelAnimationFrame(this._lookPending); this._lookPending = 0; }
     if (document.pointerLockElement === $('#stage')) document.exitPointerLock();
     try { this._wake && this._wake.release(); } catch {}
@@ -1222,6 +1336,110 @@ class Viewer {
     setVisible(!!store.settings.joystick);
   }
 
+  /* ── controller passthrough ──
+   * A physical controller paired to the phone shows up here via the Gamepad
+   * API; polled every frame and forwarded as-is in XInput's own bit layout
+   * (see GAMEPAD_BUTTON_MAP), so the host can feed it straight to a virtual
+   * Xbox 360 controller with no translation of its own. */
+  _bindGamepad() {
+    if (!navigator.getGamepads) return;
+    let connected = false;
+    const axis = v => Math.max(-32767, Math.min(32767, Math.round((v || 0) * 32767)));
+    const trig = b => Math.max(0, Math.min(255, Math.round(((b && b.value) || 0) * 255)));
+    const poll = () => {
+      if (this._ac.signal.aborted) return;
+      const pads = navigator.getGamepads();
+      const gp = pads && [...pads].find(p => p && p.connected);
+      if (gp) {
+        if (!connected) { connected = true; toast('🎮 Controller connected', 1500); }
+        const b = gp.buttons, a = gp.axes;
+        const held = i => !!(b[i] && b[i].pressed);
+        let buttons = 0;
+        if (held(12)) buttons |= 0x0001; // dpad up
+        if (held(13)) buttons |= 0x0002; // dpad down
+        if (held(14)) buttons |= 0x0004; // dpad left
+        if (held(15)) buttons |= 0x0008; // dpad right
+        if (held(9)) buttons |= 0x0010;  // start
+        if (held(8)) buttons |= 0x0020;  // back
+        if (held(10)) buttons |= 0x0040; // left stick click
+        if (held(11)) buttons |= 0x0080; // right stick click
+        if (held(4)) buttons |= 0x0100;  // LB
+        if (held(5)) buttons |= 0x0200;  // RB
+        if (held(16)) buttons |= 0x0400; // guide
+        if (held(0)) buttons |= 0x1000;  // A
+        if (held(1)) buttons |= 0x2000;  // B
+        if (held(2)) buttons |= 0x4000;  // X
+        if (held(3)) buttons |= 0x8000;  // Y
+        this.conn.send(enc_gamepad_state(
+          buttons, trig(b[6]), trig(b[7]),
+          axis(a[0]), axis(-a[1]), axis(a[2]), axis(-a[3]), // Y axes: Gamepad API is down-positive, XInput is up-positive
+        ));
+      } else if (connected) {
+        connected = false;
+        this.conn.send(enc_gamepad_disconnect());
+      }
+      this._gamepadFrame = requestAnimationFrame(poll);
+    };
+    this._gamepadFrame = requestAnimationFrame(poll);
+    this._ac.signal.addEventListener('abort', () => cancelAnimationFrame(this._gamepadFrame));
+  }
+
+  /* ── microphone toggle ── */
+  _syncMicButton() {
+    const btn = $('#mic-btn');
+    if (!btn) return;
+    const on = !!store.settings.mic;
+    btn.classList.toggle('on', on);
+  }
+
+  /* ── send a file to the PC ── */
+  _bindFiles() {
+    const input = $('#file-picker');
+    this._on(input, 'change', async () => {
+      const file = input.files && input.files[0];
+      input.value = '';
+      if (file) await this._sendFile(file);
+    });
+  }
+  async _sendFile(file) {
+    const id = (Math.random() * 0xffffffff) >>> 0;
+    const CHUNK = 32 * 1024;
+    this.conn.send(enc_file_offer(id, file.name, file.size));
+    toast(`Sending "${file.name}"…`, 60000);
+    let offset = 0;
+    while (offset < file.size) {
+      const slice = await file.slice(offset, offset + CHUNK).arrayBuffer();
+      this.conn.send(enc_file_chunk(id, offset, new Uint8Array(slice)));
+      offset += slice.byteLength;
+      if (slice.byteLength === 0) break; // shouldn't happen, but never loop forever
+    }
+    this.conn.send(enc_file_done(id));
+    toast(`Sent "${file.name}"`, 1800);
+  }
+  /** A file the host is sending this way, assembled from `filechunk`
+   * messages and handed to the browser as a download on `filedone`. */
+  _fileChunk(m) {
+    let f = this.incomingFiles.get(m.id);
+    if (!f) { f = { name: `file-${m.id}`, chunks: [] }; this.incomingFiles.set(m.id, f); }
+    f.chunks.push(m.data);
+  }
+  _fileOffer(m) {
+    this.incomingFiles.set(m.id, { name: m.name, size: m.size, chunks: [] });
+    toast(`Receiving "${m.name}"…`, 60000);
+  }
+  _fileDone(m) {
+    const f = this.incomingFiles.get(m.id);
+    this.incomingFiles.delete(m.id);
+    if (!f || !f.chunks.length) return;
+    const blob = new Blob(f.chunks);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = f.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast(`Received "${f.name}"`, 1800);
+  }
+
   /* ── gesture recogniser ── */
   _bindGestures() {
     const stage = $('#stage');
@@ -1359,7 +1577,14 @@ class Viewer {
       const now = performance.now();
       for (const t of e.changedTouches) {
         const cur = pts.get(t.identifier);
-        if (g === 'pending' && cur && now - cur.t0 < 250 &&
+        // No separate time cutoff here: `g` is only still 'pending' at all
+        // because the long-press timer above (480ms) hasn't fired yet, so
+        // that's already the real deadline. A second, shorter one used to
+        // live here (250ms) and did nothing but create a dead zone — a tap
+        // held a normal 250-480ms (easy to do while mashing to fight
+        // something) landed in neither "tap" nor "hold", and Minecraft never
+        // saw the click at all.
+        if (g === 'pending' && cur &&
             Math.hypot(cur.x - cur.x0, cur.y - cur.y0) < 8) {
           if (['direct', 'camera', 'tap'].includes(this.touchStyle)) {
             const n = this.dec.screenToNorm(cur.x, cur.y); this.moveTo(n.x, n.y);
@@ -1826,6 +2051,14 @@ class Viewer {
           }[this.mode], 2200);
         }
       }
+      else if (act === 'mic') {
+        const on = !store.settings.mic;
+        store.settings = { ...store.settings, mic: on };
+        this._syncMicButton();
+        if (on) { toast('Sharing microphone with the PC', 1800); this.mic.start(); }
+        else { toast('Microphone off', 1400); this.mic.stop(); }
+      }
+      else if (act === 'files') $('#file-picker').click();
     };
     $('#quality-sheet').onclick = e => {
       const q = e.target.dataset.q; if (!q) return;

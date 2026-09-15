@@ -45,6 +45,29 @@ pub enum ClientMessage {
     /// The first message over a direct path once its own handshake is done:
     /// "carry the session over this one now".
     DirectUse,
+    /// One controller's state this frame — the field layout matches XInput's
+    /// `XINPUT_GAMEPAD` exactly, so the host can hand it straight to a virtual
+    /// Xbox 360 controller (see `host::gamepad`) with no remapping.
+    GamepadState {
+        buttons: u16,
+        left_trigger: u8,
+        right_trigger: u8,
+        thumb_lx: i16,
+        thumb_ly: i16,
+        thumb_rx: i16,
+        thumb_ry: i16,
+    },
+    /// The device's controller was unplugged or the tab lost it.
+    GamepadDisconnect,
+    /// Offer to send a file to the host: a new transfer `id` (unique for this
+    /// session), its name and total size. Chunks follow on `FileChunk`.
+    FileOffer { id: u32, name: String, size: u64 },
+    /// One piece of a file offered by `FileOffer`. `offset` is only for the
+    /// receiver's progress reporting — chunks arrive in order over this
+    /// reliable, ordered transport, so it's never used to seek.
+    FileChunk { id: u32, offset: u64, data: Vec<u8> },
+    /// All chunks for `id` have been sent.
+    FileDone { id: u32 },
 }
 
 /// Messages sent from the host to a controlling client.
@@ -84,6 +107,14 @@ pub enum HostMessage {
     DirectAnswer(String),
     /// The host can't set up a direct path right now.
     DirectUnavailable,
+    /// The host is offering to send a file to the device (see
+    /// `ClientMessage::FileOffer` for the field meanings — same shape, other
+    /// direction).
+    FileOffer { id: u32, name: String, size: u64 },
+    /// One piece of a host-initiated file transfer.
+    FileChunk { id: u32, offset: u64, data: Vec<u8> },
+    /// All chunks for `id` have been sent.
+    FileDone { id: u32 },
 }
 
 /// One monitor on the host, in virtual-desktop pixel coordinates.

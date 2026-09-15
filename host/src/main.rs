@@ -16,7 +16,9 @@
 mod dashboard;
 mod diagnostics;
 mod direct;
+mod display;
 mod engine;
+mod gamepad;
 mod identity;
 mod paired;
 mod platform;

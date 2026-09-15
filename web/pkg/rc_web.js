@@ -228,6 +228,34 @@ export class Session {
         }
     }
     /**
+     * Encrypt+frame a microphone packet (already-encoded ADPCM bytes, same
+     * layout as `crates/audio/src/adpcm.rs`) — the browser's side of the
+     * native client's `LanSession::send_mic`. Only the host reads this
+     * channel; nothing is ever sent back on it.
+     * @param {Uint8Array} payload
+     * @returns {Uint8Array}
+     */
+    seal_mic(payload) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(payload, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.session_seal_mic(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v2 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Framed bytes queued by `feed()` echoing a keepalive ping — call once
      * right after `feed()` and send each one over the WebSocket. Separate
      * from `feed()`'s return value because sending is JS's job everywhere
@@ -382,6 +410,114 @@ export function enc_disconnect() {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         wasm.enc_disconnect(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v1 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v1;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * @param {number} id
+ * @param {number} offset
+ * @param {Uint8Array} data
+ * @returns {Uint8Array}
+ */
+export function enc_file_chunk(id, offset, data) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.enc_file_chunk(retptr, id, offset, ptr0, len0);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v2 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v2;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * @param {number} id
+ * @returns {Uint8Array}
+ */
+export function enc_file_done(id) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.enc_file_done(retptr, id);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v1 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v1;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * Offer a file to the host: the start of a transfer. Chunk it with
+ * `enc_file_chunk` afterward and finish with `enc_file_done`.
+ * @param {number} id
+ * @param {string} name
+ * @param {number} size
+ * @returns {Uint8Array}
+ */
+export function enc_file_offer(id, name, size) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.enc_file_offer(retptr, id, ptr0, len0, size);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v2 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v2;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * @returns {Uint8Array}
+ */
+export function enc_gamepad_disconnect() {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.enc_gamepad_disconnect(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v1 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v1;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * One controller frame. `buttons` is already XInput's bit layout (see
+ * `GAMEPAD_BUTTON_*` constants below) — the host hands it straight to a
+ * virtual Xbox 360 controller with no remapping.
+ * @param {number} buttons
+ * @param {number} left_trigger
+ * @param {number} right_trigger
+ * @param {number} thumb_lx
+ * @param {number} thumb_ly
+ * @param {number} thumb_rx
+ * @param {number} thumb_ry
+ * @returns {Uint8Array}
+ */
+export function enc_gamepad_state(buttons, left_trigger, right_trigger, thumb_lx, thumb_ly, thumb_rx, thumb_ry) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.enc_gamepad_state(retptr, buttons, left_trigger, right_trigger, thumb_lx, thumb_ly, thumb_rx, thumb_ry);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var v1 = getArrayU8FromWasm0(r0, r1).slice();

@@ -61,6 +61,10 @@ const CH_KEEPALIVE: u8 = 2;
 const CH_KEYFRAME_REQ: u8 = 3;
 /// Encoded sound packets, host → client (see `rc_audio::adpcm`).
 const CH_AUDIO: u8 = 4;
+/// Encoded microphone packets, client → host (same ADPCM packet shape as
+/// `CH_AUDIO`, opposite direction) — see `rc_audio::adpcm` and
+/// `rc_audio::render`.
+const CH_MIC: u8 = 5;
 
 fn err<E: std::fmt::Display>(e: E) -> TransportError {
     TransportError::Other(e.to_string())
@@ -345,6 +349,7 @@ impl VideoChannel for Video {
 pub struct LanSession {
     control: Control,
     video: Video,
+    mic_rx: Mutex<mpsc::Receiver<Vec<u8>>>,
     closed: Arc<Notify>,
     /// Set once the connection is gone, for callers that need to check rather
     /// than wait (see [`LanSession::is_closed`]).
@@ -375,6 +380,19 @@ impl LanSession {
     /// encrypted stream as everything else.
     pub async fn send_audio(&self, packet: &[u8]) -> TResult<()> {
         self.control.wire.write_message(CH_AUDIO, packet).await
+    }
+
+    /// Send one encoded microphone packet — the client's side of the mic
+    /// pipeline. The host never calls this; see `recv_mic`.
+    pub async fn send_mic(&self, packet: &[u8]) -> TResult<()> {
+        self.control.wire.write_message(CH_MIC, packet).await
+    }
+
+    /// Receive one encoded microphone packet sent by the client. Only the
+    /// host reads this — nobody sends `CH_MIC` back to the client, so this
+    /// simply never resolves there.
+    pub async fn recv_mic(&self) -> TResult<Vec<u8>> {
+        self.mic_rx.lock().await.recv().await.ok_or(TransportError::Closed)
     }
 
     /// Connect over LAN TCP as the initiating client.
@@ -426,6 +444,9 @@ impl LanSession {
 
         let (ctrl_tx, ctrl_rx) = mpsc::channel::<Vec<u8>>(256);
         let (video_tx, video_rx) = mpsc::channel::<EncodedFrame>(8);
+        // Small and lossy like the audio path it mirrors: a dropped 20ms mic
+        // packet under load is an inaudible gap, not worth backing up for.
+        let (mic_tx, mic_rx) = mpsc::channel::<Vec<u8>>(8);
         let closed = Arc::new(Notify::new());
         let closed_flag = Arc::new(AtomicBool::new(false));
         let rtt_ms = Arc::new(AtomicU32::new(0));
@@ -436,6 +457,7 @@ impl LanSession {
             wire.clone(),
             ctrl_tx,
             video_tx,
+            mic_tx,
             closed.clone(),
             closed_flag.clone(),
             rtt_ms.clone(),
@@ -460,6 +482,7 @@ impl LanSession {
                 rtt_ms,
                 key_frame_req,
             },
+            mic_rx: Mutex::new(mic_rx),
             closed,
             closed_flag,
             peer_key,
@@ -488,6 +511,7 @@ async fn reader_loop(
     wire: Arc<Wire>,
     ctrl_tx: mpsc::Sender<Vec<u8>>,
     video_tx: mpsc::Sender<EncodedFrame>,
+    mic_tx: mpsc::Sender<Vec<u8>>,
     closed: Arc<Notify>,
     closed_flag: Arc<AtomicBool>,
     rtt_ms: Arc<AtomicU32>,
@@ -562,6 +586,11 @@ async fn reader_loop(
             // Sound is played by the browser client; the native viewer doesn't
             // play it (yet), so it's dropped here rather than logged.
             Ok((CH_AUDIO, _)) => {}
+            // Only the host consumes this (see `recv_mic`); on the client
+            // side nothing ever arrives here since nothing sends it back.
+            Ok((CH_MIC, payload)) => {
+                let _ = mic_tx.try_send(payload);
+            }
             Ok((other, _)) => tracing::warn!(channel = other, "unknown channel"),
             Err(e) => {
                 tracing::info!(error = %e, "reader loop ending");

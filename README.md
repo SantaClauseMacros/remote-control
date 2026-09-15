@@ -46,7 +46,7 @@ Click the tray icon to open it.
 - **Home** — your PC ID and QR code, who's connected right now (with live FPS and ping), quick switches, and a health check that tells you if anything needs fixing
 - **Devices** — phones and computers that have connected
 - **Activity** — recent connections, drops and updates
-- **Settings** — PC name, start with Windows, video quality and frame rate, clipboard sync, updates, and tools like *Restart as Administrator*
+- **Settings** — PC name, start with Windows, video quality and frame rate, clipboard sync, microphone, keeping the PC awake, multi-monitor handling, updates, and tools like *Restart as Administrator*
 - **Help** — how to connect, touch controls, Minecraft mode and common fixes
 
 ## Using it
@@ -64,6 +64,12 @@ Click the tray icon to open it.
 **On a laptop or Chromebook,** your mouse and keyboard just work. When a game grabs the mouse, your first click locks it for aiming — press **Esc** to get it back.
 
 **Sound:** you hear the PC on your phone automatically. Tap **⋯ → Sound** to mute. (On iPhone, turn the silent switch off.)
+
+**Microphone:** tap **⋯ → Mic** to send your phone's mic to the PC. Turn on **Microphone** in the PC app's Settings first. Without a virtual audio cable installed on the PC, it just plays out loud through its speakers rather than being usable as a mic in Discord or a game — see [Using it as an actual PC microphone](#using-your-phones-mic-as-a-pc-microphone) below.
+
+**Send a file:** tap **⋯ → Send file** to upload something from your phone straight to the PC's `Downloads\RemoteControl` folder. The PC app can send files back the same way (Home, while connected → **Send a file to this device**).
+
+**Controller:** pair a real controller (Bluetooth or USB-OTG) to your phone and it shows up on the PC as a virtual Xbox controller — works in Steam games, Fortnite, Rocket League, and anything else that takes a controller. Needs the free [ViGEmBus driver](https://github.com/ViGEm/ViGEmBus/releases) installed on the PC once; if it's missing, the app tells you the first time you use a controller.
 
 ### 🎮 Game modes (phone)
 
@@ -89,14 +95,29 @@ Tap **?** for the full list. If the hotbar targets don't line up, set **Hotbar s
 
 ---
 
+## Using your phone's mic as a PC microphone
+
+Windows has no built-in way to turn incoming audio into a microphone other apps can select — it needs one free, one-time driver:
+
+1. Install [VB-CABLE](https://vb-audio.com/Cable/) (free) on the PC and reboot.
+2. In the PC app's **Settings → Features**, turn on **Microphone**.
+3. In whatever app you want to talk in (Discord, a game), set its microphone to **CABLE Output**.
+4. On your phone, tap **⋯ → Mic**.
+
+Without VB-CABLE installed, the mic toggle still works — your phone's mic just plays out loud through the PC's speakers instead, which is fine for testing but not for voice chat (everyone would hear an echo).
+
+---
+
 ## Tips
 
 - **Can't click on Task Manager or admin windows?** In the app, go to **Settings → Tools → Restart as Administrator**.
-- **Same Wi-Fi as your PC?** Remote Control connects straight across your home network (you'll see **⚡** at the top) for the lowest lag. Anywhere else it goes through the relay automatically. You can turn this off in the phone app's **⚙** settings.
-- **Laggy or choppy?** Tap **⋯ → Quality → Low**. A wired connection (or 5 GHz Wi-Fi) on the PC helps most.
+- **Same Wi-Fi as your PC?** Remote Control connects straight across your home network (you'll see **⚡** at the top) for the lowest lag. On many home routers it can also connect directly from a *different* network (mobile data, a friend's house) the same way — if it can't, it falls back to the relay automatically either way. You can turn direct connections off in the phone app's **⚙** settings.
+- **Laggy or choppy?** Tap **⋯ → Quality → Low**. A wired connection (or 5 GHz Wi-Fi) on the PC helps most. On a direct (⚡) connection, turning on **60 FPS boost on direct connections** in the PC app's Settings can make fast games noticeably smoother.
 - **Running Parsec, OBS or GeForce ShadowPlay too?** They can use up your graphics card's video encoder, which pushes Remote Control onto slower CPU encoding. Close them if things feel slow.
 - **Clipboard** text syncs both ways automatically. You can turn that off in the phone app's **⚙** settings.
-- **Updates:** the tray icon tells you when a new version is out. Download it and run it — your PC ID and settings are kept.
+- **Second monitor?** Only your primary display is streamed by default. In **Settings → Multiple monitors**, choose to duplicate everything onto the primary display, or move windows there, for the length of a session — it's undone automatically when you disconnect.
+- **PC going to sleep while you're out?** Turn on **Keep this PC awake** in Settings so it stays reachable.
+- **Updates:** the tray icon and app both tell you when a new version is out, with a one-click **Install now** that downloads and installs it, then restarts the app — your PC ID and settings are kept either way.
 
 ---
 

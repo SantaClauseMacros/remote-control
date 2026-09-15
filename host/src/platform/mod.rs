@@ -4,5 +4,6 @@
 pub mod autostart;
 pub mod elevate;
 pub mod message_window;
+pub mod power;
 pub mod single_instance;
 pub mod tray;

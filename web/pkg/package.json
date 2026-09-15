@@ -2,7 +2,7 @@
   "name": "rc-web",
   "type": "module",
   "description": "WASM bridge for the browser client: Noise session + framing + protocol codec.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT OR Apache-2.0",
   "files": [
     "rc_web_bg.wasm",

@@ -11,7 +11,7 @@
 //! The PC is an ICE-lite peer: it only answers connectivity checks the browser
 //! sends to its host candidate, which is all a same-network path needs.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
@@ -39,17 +39,35 @@ static CRYPTO: Once = Once::new();
 /// end of a byte stream that carries the data channel once it opens (the
 /// session runs its handshake over it). The WebRTC connection runs in its own
 /// task until either side goes away.
-pub fn accept(offer_sdp: &str) -> Result<(String, DuplexStream)> {
+pub async fn accept(offer_sdp: &str) -> Result<(String, DuplexStream)> {
     CRYPTO.call_once(|| str0m::crypto::from_feature_flags().install_process_default());
 
     let ip = lan_ip().context("no local network address")?;
     let socket = std::net::UdpSocket::bind(SocketAddr::new(ip, 0)).context("binding a UDP port")?;
     socket.set_nonblocking(true)?;
     let local = socket.local_addr()?;
+    let socket = UdpSocket::from_std(socket)?;
 
     let mut rtc = Rtc::builder().set_ice_lite(true).build(Instant::now());
     let candidate = Candidate::host(local, "udp").map_err(|e| anyhow!("host candidate: {e:?}"))?;
     rtc.add_local_candidate(candidate);
+
+    // Best-effort: also offer a candidate at this router's public IP, learned
+    // via one STUN request on the same socket. On a router that isn't doing
+    // symmetric NAT, that lets a device reach this PC directly even from a
+    // different network (mobile data, a friend's Wi-Fi) — not just the same
+    // one. Skipped silently on any failure; the relay is always the fallback
+    // regardless, so nothing here can make a connection worse.
+    if let Some(public) = stun_public_addr(&socket).await {
+        match Candidate::server_reflexive(public, local, "udp") {
+            Ok(c) => {
+                tracing::info!(%public, "adding a public candidate for off-network direct connections");
+                rtc.add_local_candidate(c);
+            }
+            Err(e) => tracing::debug!(error = ?e, "server-reflexive candidate rejected"),
+        }
+    }
+
     let offer = SdpOffer::from_sdp_string(offer_sdp).map_err(|e| anyhow!("parsing the offer: {e:?}"))?;
     let answer = rtc
         .sdp_api()
@@ -57,7 +75,6 @@ pub fn accept(offer_sdp: &str) -> Result<(String, DuplexStream)> {
         .map_err(|e| anyhow!("accepting the offer: {e:?}"))?;
 
     let (session_end, bridge_end) = tokio::io::duplex(1 << 20);
-    let socket = UdpSocket::from_std(socket)?;
     tracing::info!(%local, "offering a direct connection");
     tokio::spawn(async move {
         match drive(rtc, socket, local, bridge_end).await {
@@ -66,6 +83,72 @@ pub fn accept(offer_sdp: &str) -> Result<(String, DuplexStream)> {
         }
     });
     Ok((answer.to_sdp_string(), session_end))
+}
+
+/// One best-effort STUN Binding Request over `socket`, learning this NAT's
+/// public mapping for the local address it's already bound to. Tries a
+/// couple of public STUN servers with a short timeout each; `None` on any
+/// failure (no reachable server, or the whole thing times out) rather than
+/// holding up the direct-connection offer.
+async fn stun_public_addr(socket: &UdpSocket) -> Option<SocketAddr> {
+    const MAGIC: u32 = 0x2112_A442;
+    for server in ["stun.l.google.com:19302", "stun1.l.google.com:19302"] {
+        let Ok(mut addrs) = tokio::net::lookup_host(server).await else { continue };
+        let Some(server_addr) = addrs.find(|a| a.is_ipv4()) else { continue };
+
+        let mut txid = [0u8; 12];
+        rand::Rng::fill(&mut rand::thread_rng(), &mut txid);
+        let mut req = Vec::with_capacity(20);
+        req.extend_from_slice(&1u16.to_be_bytes()); // Binding Request
+        req.extend_from_slice(&0u16.to_be_bytes()); // no attributes
+        req.extend_from_slice(&MAGIC.to_be_bytes());
+        req.extend_from_slice(&txid);
+        if socket.send_to(&req, server_addr).await.is_err() {
+            continue;
+        }
+
+        let mut buf = [0u8; 512];
+        let recv = tokio::time::timeout(Duration::from_millis(500), socket.recv_from(&mut buf)).await;
+        if let Ok(Ok((n, _))) = recv {
+            if let Some(addr) = parse_stun_binding_response(&buf[..n], &txid) {
+                return Some(addr);
+            }
+        }
+    }
+    None
+}
+
+/// Pull the mapped address out of a STUN Binding Success Response — prefers
+/// XOR-MAPPED-ADDRESS (RFC 5389), falls back to the older MAPPED-ADDRESS.
+/// IPv4 only, which is all the LAN-IP path this pairs with ever produces.
+fn parse_stun_binding_response(buf: &[u8], txid: &[u8; 12]) -> Option<SocketAddr> {
+    const MAGIC: u32 = 0x2112_A442;
+    if buf.len() < 20 || u16::from_be_bytes([buf[0], buf[1]]) != 0x0101 || &buf[8..20] != txid {
+        return None;
+    }
+    let msg_len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
+    let end = (20 + msg_len).min(buf.len());
+    let mut mapped = None;
+    let mut i = 20;
+    while i + 4 <= end {
+        let attr_type = u16::from_be_bytes([buf[i], buf[i + 1]]);
+        let attr_len = u16::from_be_bytes([buf[i + 2], buf[i + 3]]) as usize;
+        let Some(val) = buf.get(i + 4..i + 4 + attr_len) else { break };
+        if attr_type == 0x0020 && val.len() >= 8 && val[1] == 0x01 {
+            // XOR-MAPPED-ADDRESS
+            let port = u16::from_be_bytes([val[2], val[3]]) ^ ((MAGIC >> 16) as u16);
+            let magic_bytes = MAGIC.to_be_bytes();
+            let ip = Ipv4Addr::new(val[4] ^ magic_bytes[0], val[5] ^ magic_bytes[1], val[6] ^ magic_bytes[2], val[7] ^ magic_bytes[3]);
+            mapped = Some(SocketAddr::new(IpAddr::V4(ip), port));
+        } else if attr_type == 0x0001 && mapped.is_none() && val.len() >= 8 && val[1] == 0x01 {
+            // MAPPED-ADDRESS
+            let port = u16::from_be_bytes([val[2], val[3]]);
+            let ip = Ipv4Addr::new(val[4], val[5], val[6], val[7]);
+            mapped = Some(SocketAddr::new(IpAddr::V4(ip), port));
+        }
+        i += 4 + attr_len.div_ceil(4) * 4;
+    }
+    mapped
 }
 
 /// Run the WebRTC connection: UDP in and out, timers, and shuttling bytes

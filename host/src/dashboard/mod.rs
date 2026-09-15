@@ -163,10 +163,9 @@ impl App {
             .as_deref()
             .and_then(|l| l.split_once('#'))
             .map(|(base, _)| base.to_string());
-        let update = status
-            .update_available
-            .as_ref()
-            .map(|(version, url, notes)| json!({ "version": version, "url": url, "notes": notes }));
+        let update = status.update_available.as_ref().map(|(version, url, notes, download_url)| {
+            json!({ "version": version, "url": url, "notes": notes, "downloadUrl": download_url })
+        });
 
         json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -218,6 +217,17 @@ impl App {
                 }
                 "clipboardSync" => s.security.clipboard_sync = as_bool()?,
                 "streamAudio" => s.audio.enabled = as_bool()?,
+                "micEnabled" => s.mic.enabled = as_bool()?,
+                "preventSleep" => s.power.prevent_sleep = as_bool()?,
+                "uncapFpsOnDirect" => s.performance.uncap_fps_on_direct = as_bool()?,
+                "multiMonitor" => {
+                    s.display.multi_monitor = match as_str()? {
+                        "ignore" => crate::settings::MultiMonitorMode::Ignore,
+                        "duplicate" => crate::settings::MultiMonitorMode::Duplicate,
+                        "moveToMain" => crate::settings::MultiMonitorMode::MoveToMain,
+                        other => bail!("unknown multiMonitor mode {other:?}"),
+                    }
+                }
                 "lanDiscovery" => s.network.lan_discovery = as_bool()?,
                 "quality" => {
                     s.performance.mode = match as_str()? {
@@ -346,6 +356,35 @@ impl App {
                 shell_open(self.ctx.paths.config_file().as_os_str());
                 ""
             }
+            "sendFile" => {
+                if self.ctx.status.borrow().session.is_none() {
+                    bail!("no device is connected right now");
+                }
+                match pick_file_dialog() {
+                    Some(path) => {
+                        let _ = self.ctx.core_tx.send(CoreCommand::SendFileToClient(path));
+                        "Sending the file to your device…"
+                    }
+                    None => "No file selected",
+                }
+            }
+            "installUpdate" => {
+                let download_url = self
+                    .ctx
+                    .status
+                    .borrow()
+                    .update_available
+                    .as_ref()
+                    .map(|(_, _, _, d)| d.clone())
+                    .filter(|d| !d.is_empty());
+                match download_url {
+                    Some(url) => {
+                        let _ = self.ctx.core_tx.send(CoreCommand::InstallUpdate(url));
+                        "Downloading the update — Remote Control will restart in a moment"
+                    }
+                    None => bail!("no update with an installer link is available"),
+                }
+            }
             "restartAdmin" => {
                 if !self.ctx.preview {
                     crate::platform::message_window::post_command(crate::platform::tray::ID_RESTART_ELEVATED);
@@ -388,6 +427,15 @@ fn settings_view(s: &Settings, autostart: bool) -> Value {
         "startWithWindows": autostart,
         "clipboardSync": s.security.clipboard_sync,
         "streamAudio": s.audio.enabled,
+        "micEnabled": s.mic.enabled,
+        "preventSleep": s.power.prevent_sleep,
+        "uncapFpsOnDirect": s.performance.uncap_fps_on_direct,
+        "multiMonitor": match s.display.multi_monitor {
+            crate::settings::MultiMonitorMode::Ignore => "ignore",
+            crate::settings::MultiMonitorMode::Duplicate => "duplicate",
+            crate::settings::MultiMonitorMode::MoveToMain => "moveToMain",
+        },
+        "monitorCount": crate::display::monitor_count(),
         "lanDiscovery": s.network.lan_discovery,
         "quality": match s.performance.mode {
             QualityMode::Low => "low",
@@ -498,6 +546,23 @@ fn reply(code: u16, content_type: &str, body: Vec<u8>) -> Resp {
 
 fn json_reply(v: Value) -> Resp {
     reply(200, "application/json; charset=utf-8", v.to_string().into_bytes())
+}
+
+/// A native "choose a file" dialog via a hidden PowerShell one-liner —
+/// avoids pulling in a whole file-dialog crate for one button. Blocks the
+/// calling thread until the user picks a file or cancels; only ever called
+/// from the dashboard's own dedicated OS thread, never from async code.
+fn pick_file_dialog() -> Option<PathBuf> {
+    let script = "Add-Type -AssemblyName System.Windows.Forms; \
+        $f = New-Object System.Windows.Forms.OpenFileDialog; \
+        $f.Title = 'Choose a file to send to your device'; \
+        if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }";
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script])
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 fn shell_open(target: &std::ffi::OsStr) {

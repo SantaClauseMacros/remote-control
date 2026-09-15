@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "rc-audio"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "tracing",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "rc-capture"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "thiserror 2.0.20",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "rc-clipboard"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "tracing",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "rc-common"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "rc-crypto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "data-encoding",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "rc-decode"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "rc-capture",
@@ -1171,7 +1171,7 @@ dependencies = [
 
 [[package]]
 name = "rc-desktop-client"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "data-encoding",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "rc-discovery"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "mdns-sd",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "rc-encode"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "rc-capture",
@@ -1215,11 +1215,12 @@ dependencies = [
 
 [[package]]
 name = "rc-host"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "data-encoding",
  "qrcode",
+ "rand 0.8.8",
  "rc-audio",
  "rc-capture",
  "rc-clipboard",
@@ -1241,13 +1242,14 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ureq",
+ "vigem-client",
  "windows 0.58.0",
  "winresource",
 ]
 
 [[package]]
 name = "rc-input"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "rc-protocol",
@@ -1259,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "rc-protocol"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "postcard",
  "serde",
@@ -1267,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "rc-relay"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1280,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "rc-transport"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1298,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "rc-web"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",
@@ -2138,6 +2140,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vigem-client"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b857e6f99efe1e1eb1e4dfb035de8ae7ec8ec56bd1928edcbd7c6e4427634d52"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2214,6 +2225,28 @@ checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
 dependencies = [
  "rustls-pki-types",
 ]
+
+[[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"
