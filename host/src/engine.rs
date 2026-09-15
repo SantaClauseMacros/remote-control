@@ -150,7 +150,7 @@ pub async fn run(
                 match accepted {
                     Ok((sess, peer)) => {
                         begin_session(
-                            sess, peer.to_string(), &settings, &mut paired,
+                            sess, peer.to_string(), host_static, &device_id, &settings, &mut paired,
                             &mut status, &status_tx, &mut session_task, &mut session_stop,
                         ).await;
                     }
@@ -174,7 +174,7 @@ pub async fn run(
                     match hs {
                         Ok(Ok(sess)) => {
                             begin_session(
-                                sess, "via relay".to_string(), &settings, &mut paired,
+                                sess, "via relay".to_string(), host_static, &device_id, &settings, &mut paired,
                                 &mut status, &status_tx, &mut session_task, &mut session_stop,
                             ).await;
                         }
@@ -270,6 +270,8 @@ pub async fn run(
 async fn begin_session(
     sess: LanSession,
     peer_label: String,
+    host_static: [u8; 32],
+    device_id: &str,
     settings: &Settings,
     paired: &mut PairedStore,
     status: &mut CoreStatus,
@@ -304,6 +306,9 @@ async fn begin_session(
         mode: settings.performance.mode,
         clipboard_sync: settings.security.clipboard_sync,
         audio: settings.audio.enabled,
+        host_static,
+        device_id: device_id.to_string(),
+        peer_key,
     };
     let stats = Arc::new(session::LiveStats::default());
     let task_stats = stats.clone();

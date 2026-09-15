@@ -377,6 +377,7 @@ fn session_json(s: &SessionInfo) -> Value {
         "height": st.height.load(Ordering::Relaxed),
         "hardwareEncoder": st.hardware_encoder.load(Ordering::Relaxed),
         "gameCaptured": st.game_captured.load(Ordering::Relaxed),
+        "direct": st.direct.load(Ordering::Relaxed),
     })
 }
 
@@ -437,6 +438,10 @@ fn describe_log_line(rest: &str) -> Option<(&'static str, String)> {
         Some(("warn", "A device tried to connect but couldn't (wrong PC ID?)".to_string()))
     } else if rest.contains("update available") {
         Some(("update", format!("Update v{} is available", field("new_version"))))
+    } else if rest.contains("switched to a direct connection") {
+        Some(("connect", "Switched to a direct connection on your local network".to_string()))
+    } else if rest.contains("direct connection lost; back to the relay") {
+        Some(("warn", "Direct connection dropped — back on the relay".to_string()))
     } else if rest.contains("settings reloaded") {
         Some(("start", "Settings changed".to_string()))
     } else {

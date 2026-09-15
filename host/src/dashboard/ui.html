@@ -528,7 +528,9 @@ function renderStatus() {
   $('#session-live').hidden = !live;
   if (live) {
     $('#peer-id').textContent = live.keyId;
-    $('#peer-route').textContent = live.route === 'via relay' ? 'Connected through the relay' : `On your local network (${live.route})`;
+    $('#peer-route').textContent = live.direct
+      ? '⚡ Direct on your local network'
+      : live.route === 'via relay' ? 'Connected through the relay' : `On your local network (${live.route})`;
     const now = performance.now();
     if (lastFrames && lastFrames.since === live.since) {
       const fps = (live.framesSent - lastFrames.frames) / ((now - lastFrames.t) / 1000);

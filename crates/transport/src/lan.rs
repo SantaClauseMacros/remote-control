@@ -346,6 +346,9 @@ pub struct LanSession {
     control: Control,
     video: Video,
     closed: Arc<Notify>,
+    /// Set once the connection is gone, for callers that need to check rather
+    /// than wait (see [`LanSession::is_closed`]).
+    closed_flag: Arc<AtomicBool>,
     peer_key: [u8; 32],
     was_pairing: bool,
     _reader: JoinHandle<()>,
@@ -361,6 +364,11 @@ impl LanSession {
     /// Was this a first-time (code-authenticated) pairing?
     pub fn was_pairing(&self) -> bool {
         self.was_pairing
+    }
+
+    /// Has the underlying connection ended?
+    pub fn is_closed(&self) -> bool {
+        self.closed_flag.load(Ordering::Acquire)
     }
 
     /// Send one encoded sound packet, on its own channel of the same
@@ -419,6 +427,7 @@ impl LanSession {
         let (ctrl_tx, ctrl_rx) = mpsc::channel::<Vec<u8>>(256);
         let (video_tx, video_rx) = mpsc::channel::<EncodedFrame>(8);
         let closed = Arc::new(Notify::new());
+        let closed_flag = Arc::new(AtomicBool::new(false));
         let rtt_ms = Arc::new(AtomicU32::new(0));
         let key_frame_req = Arc::new(AtomicBool::new(false));
 
@@ -428,6 +437,7 @@ impl LanSession {
             ctrl_tx,
             video_tx,
             closed.clone(),
+            closed_flag.clone(),
             rtt_ms.clone(),
             key_frame_req.clone(),
         ));
@@ -451,6 +461,7 @@ impl LanSession {
                 key_frame_req,
             },
             closed,
+            closed_flag,
             peer_key,
             was_pairing,
             _reader: reader,
@@ -478,6 +489,7 @@ async fn reader_loop(
     ctrl_tx: mpsc::Sender<Vec<u8>>,
     video_tx: mpsc::Sender<EncodedFrame>,
     closed: Arc<Notify>,
+    closed_flag: Arc<AtomicBool>,
     rtt_ms: Arc<AtomicU32>,
     key_frame_req: Arc<AtomicBool>,
 ) {
@@ -557,6 +569,7 @@ async fn reader_loop(
             }
         }
     }
+    closed_flag.store(true, Ordering::Release);
     closed.notify_waiters();
 }
 

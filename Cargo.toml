@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
@@ -51,6 +51,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tiny_http = "0.12"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# WebRTC for direct same-network connections. Windows' own crypto for DTLS,
+# so no OpenSSL / CMake / NASM is needed to build.
+str0m = { version = "0.23", default-features = false, features = ["wincrypto-dimpl"] }
 
 [workspace.dependencies.windows]
 version = "0.58"

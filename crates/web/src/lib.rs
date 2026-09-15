@@ -423,6 +423,18 @@ pub fn enc_disconnect() -> Vec<u8> {
     enc(&ClientMessage::Disconnect)
 }
 
+/// Offer the host a direct (same-network) path: this browser's WebRTC SDP offer.
+#[wasm_bindgen]
+pub fn enc_direct_offer(sdp: &str) -> Vec<u8> {
+    enc(&ClientMessage::DirectOffer(sdp.to_string()))
+}
+
+/// First message over a finished direct path: move the session onto it.
+#[wasm_bindgen]
+pub fn enc_direct_use() -> Vec<u8> {
+    enc(&ClientMessage::DirectUse)
+}
+
 fn map_button(b: u8) -> PointerButton {
     match b {
         1 => PointerButton::Right,
@@ -447,6 +459,8 @@ pub fn decode_host_message(payload: &[u8]) -> Result<JsValue, JsValue> {
         HostMessage::Disconnect { reason } => HostMsgJs::Disconnect { reason },
         HostMessage::CursorCaptured(captured) => HostMsgJs::CursorCaptured { captured },
         HostMessage::GameArea { x, y, w, h } => HostMsgJs::GameArea { x, y, w, h },
+        HostMessage::DirectAnswer(sdp) => HostMsgJs::DirectAnswer { sdp },
+        HostMessage::DirectUnavailable => HostMsgJs::DirectUnavailable,
         HostMessage::Displays(d) => HostMsgJs::Displays {
             displays: d
                 .into_iter()
@@ -476,6 +490,10 @@ enum HostMsgJs {
     CursorCaptured { captured: bool },
     /// `kind: "gamearea"` — fractions of the streamed display.
     GameArea { x: f32, y: f32, w: f32, h: f32 },
+    /// `kind: "directanswer"` — the host's WebRTC SDP answer.
+    DirectAnswer { sdp: String },
+    /// `kind: "directunavailable"`
+    DirectUnavailable,
 }
 
 #[derive(Serialize)]

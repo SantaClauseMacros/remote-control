@@ -92,6 +92,7 @@ Tap **?** for the full list. If the hotbar targets don't line up, set **Hotbar s
 ## Tips
 
 - **Can't click on Task Manager or admin windows?** In the app, go to **Settings → Tools → Restart as Administrator**.
+- **Same Wi-Fi as your PC?** Remote Control connects straight across your home network (you'll see **⚡** at the top) for the lowest lag. Anywhere else it goes through the relay automatically. You can turn this off in the phone app's **⚙** settings.
 - **Laggy or choppy?** Tap **⋯ → Quality → Low**. A wired connection (or 5 GHz Wi-Fi) on the PC helps most.
 - **Running Parsec, OBS or GeForce ShadowPlay too?** They can use up your graphics card's video encoder, which pushes Remote Control onto slower CPU encoding. Close them if things feel slow.
 - **Clipboard** text syncs both ways automatically. You can turn that off in the phone app's **⚙** settings.
@@ -102,7 +103,7 @@ Tap **?** for the full list. If the hotbar targets don't line up, set **Hotbar s
 ## Security & privacy
 
 - **Your PC ID works like a password.** Anyone who has it can control your PC, so only use it on your own devices. If it ever leaks: right-click the tray icon → **Exit**, delete the folder `%LOCALAPPDATA%\RemoteControl`, and start Remote Control again to get a brand-new ID.
-- Everything between your device and your PC is **end-to-end encrypted** (the Noise protocol). The relay in the middle only passes encrypted data along — it can't see your screen or what you type.
+- Everything between your device and your PC is **end-to-end encrypted** (the Noise protocol). The relay in the middle only passes encrypted data along — it can't see your screen or what you type. Direct (⚡) connections use the same encryption.
 - Your PC shows a notification whenever a device connects. **Disconnect all sessions** in the tray menu kicks everyone off.
 - To stop remote access, right-click the tray icon → **Exit**, or uninstall it.
 

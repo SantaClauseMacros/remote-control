@@ -15,6 +15,7 @@
 
 mod dashboard;
 mod diagnostics;
+mod direct;
 mod engine;
 mod identity;
 mod paired;

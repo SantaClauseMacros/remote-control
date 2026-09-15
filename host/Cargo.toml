@@ -38,6 +38,7 @@ tracing-appender.workspace = true
 ureq.workspace = true
 tiny_http.workspace = true
 qrcode.workspace = true
+str0m.workspace = true
 
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true

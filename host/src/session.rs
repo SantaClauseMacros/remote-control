@@ -9,7 +9,7 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use rc_capture::{Capturer, D3dContext, DesktopRect, Grab};
 use rc_clipboard::ClipboardWatcher;
 use rc_encode::{EncodeConfig, StreamEncoder};
@@ -19,8 +19,9 @@ use rc_transport::lan::LanSession;
 use rc_transport::{EncodedFrame, Session};
 use tokio::sync::watch;
 
-/// Tunables for a session, taken from host settings.
-#[derive(Debug, Clone, Copy)]
+/// Tunables for a session, taken from host settings. (Not `Debug`: it holds
+/// the host's secret key.)
+#[derive(Clone)]
 pub struct SessionParams {
     pub fps: u32,
     /// `0` = let [`EncodeConfig::balanced`] pick from the resolution.
@@ -32,6 +33,11 @@ pub struct SessionParams {
     pub clipboard_sync: bool,
     /// Stream the PC's sound.
     pub audio: bool,
+    /// This host's static key and PC ID — what a direct path's handshake needs.
+    pub host_static: [u8; 32],
+    pub device_id: String,
+    /// The connected device's static key; a direct path must present the same.
+    pub peer_key: [u8; 32],
 }
 
 /// Live numbers from a running session, shared with the dashboard. Written by
@@ -48,6 +54,35 @@ pub struct LiveStats {
     pub hardware_encoder: AtomicBool,
     /// A game currently has the mouse captured.
     pub game_captured: AtomicBool,
+    /// The session is on a direct same-network path rather than the relay.
+    pub direct: AtomicBool,
+}
+
+/// The path a session's traffic takes. Starts as whatever the device connected
+/// over (usually the relay) and can move to a direct path mid-session — and
+/// back again if that drops. Senders fetch the current path for every message.
+struct Link {
+    current: StdMutex<Arc<LanSession>>,
+}
+
+impl Link {
+    fn new(session: Arc<LanSession>) -> Self {
+        Self {
+            current: StdMutex::new(session),
+        }
+    }
+
+    fn get(&self) -> Arc<LanSession> {
+        self.current.lock().unwrap().clone()
+    }
+
+    fn set(&self, session: Arc<LanSession>) {
+        *self.current.lock().unwrap() = session;
+    }
+
+    async fn send(&self, msg: &HostMessage) {
+        let _ = self.get().control().send(rc_protocol::encode(msg)).await;
+    }
 }
 
 /// Backpressure signals the capture thread checks before handing the encoder
@@ -104,7 +139,10 @@ pub async fn run(
     mut stop: watch::Receiver<bool>,
     stats: Arc<LiveStats>,
 ) -> Result<()> {
-    let session = Arc::new(session);
+    // The path the device connected over, kept to fall back to if a direct
+    // path is set up and later lost.
+    let relay = Arc::new(session);
+    let link = Arc::new(Link::new(relay.clone()));
 
     // ── capture thread: reports geometry, then waits for the encoder ─────────
     let capture_stop = Arc::new(AtomicBool::new(false));
@@ -163,7 +201,7 @@ pub async fn run(
     // again. Drop everything until the next keyframe instead: that's a clean
     // cut between two streams rather than a hole punched in one.
     let resync = Arc::new(AtomicBool::new(false));
-    let sv = session.clone();
+    let sv = link.clone();
     let vc = stats.clone();
     let nb = gate.clone();
     let rs = resync.clone();
@@ -181,12 +219,14 @@ pub async fn run(
                 key_frame: p.key_frame,
                 timestamp_us: p.timestamp_us,
             };
-            let sent = sv.video().send(frame).await;
+            let sent = sv.get().video().send(frame).await;
             // Caught up only once nothing else is already waiting behind us.
             nb.net_busy.store(!pkt_rx.is_empty(), Ordering::Release);
             if let Err(e) = sent {
-                tracing::warn!(error = %e, "video send failed");
-                break;
+                // Keep going: the control loop either moves the session back
+                // to the relay or ends it.
+                tracing::debug!(error = %e, "video send failed");
+                continue;
             }
             vc.frames_sent.fetch_add(1, Ordering::Relaxed);
         }
@@ -204,10 +244,7 @@ pub async fn run(
         primary: true,
         scale: 1.0,
     }];
-    let _ = session
-        .control()
-        .send(rc_protocol::encode(&HostMessage::Displays(displays)))
-        .await;
+    link.send(&HostMessage::Displays(displays)).await;
 
     // ── clipboard sync ────────────────────────────────────────────────────
     let clipboard = params
@@ -231,14 +268,11 @@ pub async fn run(
                 }
             })
             .ok();
-        let sc = session.clone();
+        let sc = link.clone();
         tokio::spawn(async move {
             while let Some(text) = clip_rx.recv().await {
                 tracing::debug!(len = text.len(), "host clipboard → client");
-                let _ = sc
-                    .control()
-                    .send(rc_protocol::encode(&HostMessage::ClipboardText(text)))
-                    .await;
+                sc.send(&HostMessage::ClipboardText(text)).await;
             }
         });
     }
@@ -262,12 +296,10 @@ pub async fn run(
                 }
             })
             .ok();
-        let sa = session.clone();
+        let sa = link.clone();
         tokio::spawn(async move {
             while let Some(packet) = audio_rx.recv().await {
-                if sa.send_audio(&packet).await.is_err() {
-                    break;
-                }
+                let _ = sa.get().send_audio(&packet).await;
             }
         });
     }
@@ -328,13 +360,20 @@ pub async fn run(
     // Last `GameArea` sent, so it only goes out when the window moves.
     let mut last_area: Option<(f32, f32, f32, f32)> = None;
 
+    // A direct path: a session handshaken over WebRTC that's waiting for the
+    // device's "use this one" (`pending`), then carrying traffic (`on_direct`).
+    let (direct_tx, mut direct_rx) = tokio::sync::mpsc::unbounded_channel::<Result<LanSession>>();
+    let mut pending: Option<Arc<LanSession>> = None;
+    let mut on_direct = false;
+
     let reason;
     loop {
         let release_due = injector.next_release_due();
+        let cur = link.get();
         tokio::select! {
-            r = session.control().recv() => match r {
+            r = cur.control().recv() => match r {
                 Ok(bytes) => {
-                    match handle_client_msg(&bytes, &mut injector, clipboard.as_ref(), &session).await {
+                    match handle_client_msg(&bytes, &mut injector, clipboard.as_ref(), &link).await {
                         ClientAction::Input => {
                             stats.input_events.fetch_add(1, Ordering::Relaxed);
                         }
@@ -349,13 +388,49 @@ pub async fn run(
                                 );
                             }
                         }
+                        ClientAction::DirectOffer(sdp) => {
+                            offer_direct(&sdp, &link, &params, &direct_tx).await;
+                        }
                         ClientAction::None => {}
                     }
                 }
-                Err(e) => { reason = format!("client disconnected: {e}"); break; }
+                Err(e) => {
+                    // The direct path dropped: carry on over the relay if it's
+                    // still up, with a fresh keyframe for the switch.
+                    if on_direct && !relay.is_closed() {
+                        tracing::info!("direct connection lost; back to the relay");
+                        link.set(relay.clone());
+                        on_direct = false;
+                        stats.direct.store(false, Ordering::Relaxed);
+                        recreate_encoder(current_mode);
+                        continue;
+                    }
+                    reason = format!("client disconnected: {e}");
+                    break;
+                }
+            },
+            r = async { pending.as_ref().expect("guarded").control().recv().await }, if pending.is_some() => {
+                match r.map(|b| rc_protocol::decode::<ClientMessage>(&b)) {
+                    Ok(Ok(ClientMessage::DirectUse)) => {
+                        if let Some(direct) = pending.take() {
+                            link.set(direct);
+                            on_direct = true;
+                            stats.direct.store(true, Ordering::Relaxed);
+                            tracing::info!("switched to a direct connection");
+                            recreate_encoder(current_mode);
+                        }
+                    }
+                    Ok(_) => {} // nothing else belongs before the switch
+                    Err(_) => pending = None,
+                }
+            }
+            Some(result) = direct_rx.recv() => match result {
+                Ok(sess) if sess.peer_key() == params.peer_key => pending = Some(Arc::new(sess)),
+                Ok(_) => tracing::warn!("a direct path authenticated a different device; ignored"),
+                Err(e) => tracing::info!(error = %e, "direct connection didn't come up; staying on the relay"),
             },
             _ = keyframe_poll.tick() => {
-                if session.video().take_key_frame_request() {
+                if cur.video().take_key_frame_request() {
                     tracing::debug!("client requested a keyframe; recreating encoder");
                     recreate_encoder(current_mode);
                 }
@@ -368,7 +443,7 @@ pub async fn run(
                 // gate, never touches the encoder, so there's no re-keying
                 // and nothing to see beyond a lower frame rate while a link
                 // is struggling.
-                let rtt = session.video().feedback().rtt_ms;
+                let rtt = cur.video().feedback().rtt_ms;
                 stats.rtt_ms_x100.store((rtt * 100.0) as u32, Ordering::Relaxed);
                 if rtt > 0.0 {
                     rtt_floor = if rtt_floor == 0.0 || rtt < rtt_floor {
@@ -414,10 +489,7 @@ pub async fn run(
                     injector.set_captured(captured);
                     stats.game_captured.store(captured, Ordering::Relaxed);
                     tracing::debug!(captured, "cursor capture changed");
-                    let _ = session
-                        .control()
-                        .send(rc_protocol::encode(&HostMessage::CursorCaptured(captured)))
-                        .await;
+                    link.send(&HostMessage::CursorCaptured(captured)).await;
                 }
                 // While a game has the mouse, tell the client where that game
                 // is drawn, so overlays line up with its UI whether it's
@@ -434,15 +506,13 @@ pub async fn run(
                         if last_area != Some(area) {
                             last_area = Some(area);
                             tracing::debug!(?area, "game area changed");
-                            let _ = session
-                                .control()
-                                .send(rc_protocol::encode(&HostMessage::GameArea {
-                                    x: area.0,
-                                    y: area.1,
-                                    w: area.2,
-                                    h: area.3,
-                                }))
-                                .await;
+                            link.send(&HostMessage::GameArea {
+                                x: area.0,
+                                y: area.1,
+                                w: area.2,
+                                h: area.3,
+                            })
+                            .await;
                         }
                     }
                 }
@@ -451,14 +521,14 @@ pub async fn run(
                 tracing::info!(
                     frames_sent = stats.frames_sent.load(Ordering::Relaxed),
                     input_events = stats.input_events.load(Ordering::Relaxed),
-                    rtt_ms = session.video().feedback().rtt_ms,
+                    rtt_ms = cur.video().feedback().rtt_ms,
+                    direct = on_direct,
                     "session stats"
                 );
             }
             _ = stop.changed() => {
                 if *stop.borrow() { reason = "host stopping".into(); break; }
             }
-            _ = session.closed() => { reason = "connection closed".into(); break; }
         }
     }
 
@@ -471,11 +541,39 @@ pub async fn run(
     drop(encoder_slot); // last ref → flushes and joins the encoder thread
     injector.release_all();
     video_task.abort();
-    let _ = session
-        .control()
-        .send(rc_protocol::encode(&HostMessage::Disconnect { reason }))
-        .await;
+    link.send(&HostMessage::Disconnect { reason }).await;
     Ok(())
+}
+
+/// Answer a device's offer of a direct path. The answer goes back over the
+/// current link; the direct session — once its own handshake completes, or
+/// fails — arrives on `direct_tx`.
+async fn offer_direct(
+    sdp: &str,
+    link: &Link,
+    params: &SessionParams,
+    direct_tx: &tokio::sync::mpsc::UnboundedSender<Result<LanSession>>,
+) {
+    match crate::direct::accept(sdp) {
+        Ok((answer, stream)) => {
+            link.send(&HostMessage::DirectAnswer(answer)).await;
+            let tx = direct_tx.clone();
+            let (key, id) = (params.host_static, params.device_id.clone());
+            tokio::spawn(async move {
+                let handshake = LanSession::over_stream_responder(stream, &key, &id);
+                let result = match tokio::time::timeout(Duration::from_secs(20), handshake).await {
+                    Ok(Ok(sess)) => Ok(sess),
+                    Ok(Err(e)) => Err(anyhow!(e)),
+                    Err(_) => Err(anyhow!("timed out")),
+                };
+                let _ = tx.send(result);
+            });
+        }
+        Err(e) => {
+            tracing::info!(error = ?e, "can't offer a direct connection");
+            link.send(&HostMessage::DirectUnavailable).await;
+        }
+    }
 }
 
 /// What the control loop should do in response to one decoded client message.
@@ -485,13 +583,15 @@ enum ClientAction {
     Input,
     /// The client wants the video stream renegotiated to this target.
     SetQuality(QualityMode),
+    /// The client offers a direct path (WebRTC SDP).
+    DirectOffer(String),
 }
 
 async fn handle_client_msg(
     bytes: &[u8],
     injector: &mut Injector,
     clipboard: Option<&Arc<StdMutex<ClipboardWatcher>>>,
-    session: &Arc<LanSession>,
+    link: &Link,
 ) -> ClientAction {
     match rc_protocol::decode::<ClientMessage>(bytes) {
         Ok(ClientMessage::Input(ev)) => {
@@ -504,11 +604,11 @@ async fn handle_client_msg(
             return ClientAction::Input;
         }
         Ok(ClientMessage::Ping { nonce }) => {
-            let _ = session
-                .control()
-                .send(rc_protocol::encode(&HostMessage::Pong { nonce }))
-                .await;
+            link.send(&HostMessage::Pong { nonce }).await;
         }
+        Ok(ClientMessage::DirectOffer(sdp)) => return ClientAction::DirectOffer(sdp),
+        // Only meaningful as the first message on a direct path.
+        Ok(ClientMessage::DirectUse) => {}
         Ok(ClientMessage::ClipboardText(text)) => {
             if let Some(watcher) = clipboard {
                 if let Ok(mut w) = watcher.lock() {

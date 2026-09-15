@@ -2,7 +2,7 @@ import init, {
   Session, gen_static_key, encode_client_hello, encode_query_hello,
   enc_pointer_move, enc_pointer_delta, enc_pointer_button, enc_pointer_button_in_place,
   enc_scroll, enc_key, enc_text,
-  enc_ping, enc_clipboard, enc_quality, enc_disconnect,
+  enc_ping, enc_clipboard, enc_quality, enc_disconnect, enc_direct_offer, enc_direct_use,
   decode_host_message, parse_video_payload, avc_codec_string, is_keyframe,
   ack_ok, ack_host_offline, ack_bad_key,
 } from './pkg/rc_web.js';
@@ -145,7 +145,7 @@ const store = {
   set devices(v) { localStorage.rc_devices = JSON.stringify(v); },
   get settings() {
     return Object.assign(
-      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true, muted: false },
+      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true, muted: false, direct: true },
       (() => { try { return JSON.parse(localStorage.rc_settings || '{}'); } catch { return {}; } })());
   },
   set settings(v) { localStorage.rc_settings = JSON.stringify(v); },
@@ -280,6 +280,7 @@ $('#btn-settings').onclick = () => {
   const s = store.settings, f = sdlg.querySelector('form');
   f.relay.value = s.relay; f.relayKey.value = s.relayKey;
   f.sens.value = s.sens; f.clip.checked = s.clip; f.invertScroll.checked = s.invertScroll;
+  f.direct.checked = s.direct !== false;
   sdlg.showModal();
 };
 sdlg.addEventListener('close', () => {
@@ -288,6 +289,7 @@ sdlg.addEventListener('close', () => {
     ...store.settings,
     relay: f.relay.value.trim(), relayKey: f.relayKey.value.trim(),
     sens: parseFloat(f.sens.value), clip: f.clip.checked, invertScroll: f.invertScroll.checked,
+    direct: f.direct.checked,
   };
   renderList();
 });
@@ -299,11 +301,22 @@ function canonicalId(s) {
   return (raw.match(/.{1,5}/g) || []).join('-');
 }
 
+const withTimeout = (promise, ms, what) => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(new Error(`${what} timed out`)), ms)),
+]);
+
 class Conn {
   constructor(device) {
     this.device = device;
     this.ws = null; this.sess = null; this.phase = 'idle'; this.pairing = false;
+    // A direct same-network path, once it's carrying the session:
+    // { pc, dc, sess, live }. The relay stays open underneath as a fallback.
+    this.direct = null;
+    this._directWait = null;
+    this.relayDown = false;
     this.onvideo = () => {}; this.onhost = () => {}; this.onclose = () => {}; this.onpaired = () => {};
+    this.ondirect = () => {};
   }
   async open() {
     const url = wsUrl(this.device.relay);
@@ -321,31 +334,138 @@ class Conn {
       this.ws.send(encode_client_hello(this.device.deviceId, store.settings.relayKey));
     };
     this.ws.onmessage = ev => this._rx(new Uint8Array(ev.data));
-    this.ws.onerror = () => this._fail('Network error reaching the relay.');
-    this.ws.onclose = () => { if (this.phase !== 'done') this._fail('Connection closed.'); };
+    this.ws.onerror = () => this._relayGone('Network error reaching the relay.');
+    this.ws.onclose = () => this._relayGone('Connection closed.');
+  }
+  _relayGone(reason) {
+    if (this.phase === 'done') return;
+    // On a direct path the relay was only the fallback.
+    if (this.direct && this.direct.live) { this.relayDown = true; return; }
+    this._fail(reason);
   }
   _fail(reason) {
     if (this.phase === 'done') return;
     this.phase = 'done';
+    this._closeDirect();
     try { this.ws && this.ws.close(); } catch {}
     this.onclose(reason);
   }
+  _closeDirect() {
+    const d = this.direct;
+    this.direct = null;
+    if (d) { try { d.dc.close(); } catch {} try { d.pc.close(); } catch {} }
+  }
+  /** The session, and the way to send on it, that carries traffic right now. */
+  _active() {
+    const d = this.direct;
+    return d && d.live
+      ? { sess: d.sess, send: bytes => d.dc.send(bytes) }
+      : { sess: this.sess, send: bytes => this.ws.send(bytes) };
+  }
   close() {
     if (this.sess && this.phase === 'live') {
-      try { this.ws.send(this.sess.seal_control(enc_disconnect())); } catch {}
+      try { const a = this._active(); a.send(a.sess.seal_control(enc_disconnect())); } catch {}
     }
     this.phase = 'done';
+    this._closeDirect();
     try { this.ws && this.ws.close(); } catch {}
   }
   send(controlBytes) {
     if (this.phase !== 'live') return;
-    try { this.ws.send(this.sess.seal_control(controlBytes)); }
+    try { const a = this._active(); a.send(a.sess.seal_control(controlBytes)); }
     catch (e) { this._fail(String(e)); }
   }
   /** Ask the host to send a fresh keyframe (recovery from a decode error). */
   requestKeyframe() {
     if (this.phase !== 'live') return;
-    try { this.ws.send(this.sess.seal_keyframe_request()); } catch {}
+    try { const a = this._active(); a.send(a.sess.seal_keyframe_request()); } catch {}
+  }
+
+  /**
+   * Try to move the session onto a direct path. Runs in the background once
+   * the relay session is up: send a WebRTC offer over it, and if the PC can
+   * be reached on this network, run a second end-to-end handshake over the
+   * data channel and switch to it. Any failure just leaves things on the relay.
+   */
+  async _tryDirect() {
+    if (!window.RTCPeerConnection || store.settings.direct === false) return;
+    let pc = null;
+    try {
+      pc = new RTCPeerConnection({ iceServers: [] });
+      const dc = pc.createDataChannel('rc', { ordered: true });
+      dc.binaryType = 'arraybuffer';
+      await pc.setLocalDescription(await pc.createOffer());
+      // The PC only answers checks this browser sends it, so the offer doesn't
+      // need this side's candidates; a brief wait just lets them settle.
+      await withTimeout(new Promise(resolve => {
+        if (pc.iceGatheringState === 'complete') return resolve();
+        pc.addEventListener('icegatheringstatechange', () => {
+          if (pc.iceGatheringState === 'complete') resolve();
+        });
+      }), 600, 'ICE gathering').catch(() => {});
+
+      const reply = new Promise(resolve => { this._directWait = resolve; });
+      this.send(enc_direct_offer(pc.localDescription.sdp));
+      const answer = await withTimeout(reply, 6000, 'direct answer');
+      if (answer.kind !== 'directanswer') throw new Error('the PC offered no direct path');
+      await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
+
+      const sess = Session.new_pair(staticKey(), canonicalId(this.device.deviceId));
+      let handshakeDone, handshakeFailed;
+      const handshake = new Promise((res, rej) => { handshakeDone = res; handshakeFailed = rej; });
+      dc.onmessage = ev => {
+        const bytes = new Uint8Array(ev.data);
+        if (this.direct && this.direct.dc === dc) return this._onDirect(bytes);
+        try {
+          const out = sess.read_handshake(bytes);
+          if (out) dc.send(out);
+          if (sess.ready()) handshakeDone();
+        } catch (e) { handshakeFailed(e); }
+      };
+      await withTimeout(new Promise((res, rej) => {
+        dc.onopen = res;
+        dc.onclose = () => rej(new Error('direct channel closed'));
+      }), 6000, 'direct channel');
+      dc.send(sess.first_message());
+      await withTimeout(handshake, 6000, 'direct handshake');
+
+      // Same PC on both paths, and still connected?
+      const a = sess.peer_key(), b = this.sess.peer_key();
+      if (!a || !b || b64.enc(a) !== b64.enc(b)) throw new Error('a different PC answered on the direct path');
+      if (this.phase !== 'live') throw new Error('the session ended');
+
+      this.direct = { pc, dc, sess, live: true };
+      dc.onclose = () => this._directLost();
+      pc.onconnectionstatechange = () => {
+        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this._directLost();
+      };
+      dc.send(sess.seal_control(enc_direct_use()));
+      this._onDirect(new Uint8Array()); // anything that arrived with the handshake
+      this.ondirect(true);
+    } catch (e) {
+      this._directWait = null;
+      if (!this.direct) { try { pc && pc.close(); } catch {} }
+    }
+  }
+  _onDirect(bytes) {
+    const d = this.direct;
+    if (!d || !d.live) return;
+    try {
+      this._drain(d.sess.feed(bytes), true);
+      for (const reply of d.sess.take_keepalive_replies()) d.dc.send(reply);
+    } catch { this._directLost(); }
+  }
+  _directLost() {
+    const d = this.direct;
+    if (!d || !d.live || this.phase !== 'live') return;
+    d.live = false;
+    this._closeDirect();
+    if (this.relayDown || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return this._fail('Connection closed.');
+    }
+    // The PC moves back to the relay on its own; ask for a clean picture.
+    this.ondirect(false);
+    this.requestKeyframe();
   }
   _rx(bytes) {
     try {
@@ -373,6 +493,7 @@ class Conn {
           }
           this._drain(this.sess.feed(new Uint8Array()));
           this.onopen && this.onopen();
+          setTimeout(() => this._tryDirect(), 0);
         }
         return;
       }
@@ -382,15 +503,27 @@ class Conn {
       }
     } catch (e) { this._fail(String(e && e.message || e)); }
   }
-  _drain(frames) {
+  _drain(frames, fromDirect = false) {
+    // Once on the direct path, anything still arriving over the relay is
+    // stale; only its keepalives (answered inside feed) still matter.
+    const stale = !fromDirect && this.direct && this.direct.live;
     for (const [ch, payload] of frames) {
+      if (stale) continue;
       if (ch === CH_VIDEO) {
         const v = parse_video_payload(payload);
         this.onvideo(new Uint8Array(v.data), v.key_frame, v.timestamp_us);
       } else if (ch === CH_AUDIO) {
         sound.push(payload);
       } else {
-        try { this.onhost(decode_host_message(payload)); } catch {}
+        let m;
+        try { m = decode_host_message(payload); } catch { continue; }
+        if (this._directWait && (m.kind === 'directanswer' || m.kind === 'directunavailable')) {
+          const resolve = this._directWait;
+          this._directWait = null;
+          resolve(m);
+        } else {
+          this.onhost(m);
+        }
       }
     }
   }
@@ -755,6 +888,10 @@ class Viewer {
     this.conn.onclose = (reason) => this._end(reason);
     this.conn.onvideo = (au, key, ts) => this.dec.push(au, key, ts);
     this.conn.onhost = (m) => this._host(m);
+    this.conn.ondirect = (on) => {
+      this._direct = on;
+      toast(on ? '⚡ Direct connection — same network' : 'Direct connection lost — using the relay', 1800);
+    };
     this.conn.onpaired = (hostKeyB64) => {
       const devs = store.devices;
       const d = devs.find(x => x.id === this.device.id);
@@ -804,6 +941,7 @@ class Viewer {
       const fps = Math.round(this.dec.frameCount - this._lastFrameCount);
       this._lastFrameCount = this.dec.frameCount;
       const bits = [];
+      if (this._direct) bits.push('⚡');
       if (this._rtt != null) bits.push(`${this._rtt} ms`);
       bits.push(`${fps} fps`);
       // Only shown when they mean something, so the pill stays unobtrusive.

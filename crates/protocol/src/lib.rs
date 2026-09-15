@@ -38,6 +38,13 @@ pub enum ClientMessage {
     SetQuality(QualityMode),
     /// Client is leaving; the host should tear the session down promptly.
     Disconnect,
+    /// Offer to move the session onto a direct (same-network) path: the
+    /// browser's WebRTC SDP offer. The host replies `DirectAnswer` or
+    /// `DirectUnavailable`. Appended last so older hosts just ignore it.
+    DirectOffer(String),
+    /// The first message over a direct path once its own handshake is done:
+    /// "carry the session over this one now".
+    DirectUse,
 }
 
 /// Messages sent from the host to a controlling client.
@@ -73,6 +80,10 @@ pub enum HostMessage {
         w: f32,
         h: f32,
     },
+    /// The host's SDP answer to a `DirectOffer`.
+    DirectAnswer(String),
+    /// The host can't set up a direct path right now.
+    DirectUnavailable,
 }
 
 /// One monitor on the host, in virtual-desktop pixel coordinates.

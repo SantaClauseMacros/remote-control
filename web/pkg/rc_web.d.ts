@@ -87,6 +87,16 @@ export function decode_host_message(payload: Uint8Array): any;
 
 export function enc_clipboard(text: string): Uint8Array;
 
+/**
+ * Offer the host a direct (same-network) path: this browser's WebRTC SDP offer.
+ */
+export function enc_direct_offer(sdp: string): Uint8Array;
+
+/**
+ * First message over a finished direct path: move the session onto it.
+ */
+export function enc_direct_use(): Uint8Array;
+
 export function enc_disconnect(): Uint8Array;
 
 export function enc_key(code: number, pressed: boolean): Uint8Array;
@@ -157,6 +167,8 @@ export interface InitOutput {
     readonly avc_codec_string: (a: number, b: number, c: number) => void;
     readonly decode_host_message: (a: number, b: number, c: number) => void;
     readonly enc_clipboard: (a: number, b: number, c: number) => void;
+    readonly enc_direct_offer: (a: number, b: number, c: number) => void;
+    readonly enc_direct_use: (a: number) => void;
     readonly enc_disconnect: (a: number) => void;
     readonly enc_key: (a: number, b: number, c: number) => void;
     readonly enc_ping: (a: number, b: number) => void;
