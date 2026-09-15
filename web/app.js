@@ -32,19 +32,19 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
  * the underlying mousedown/touchstart from reaching `#stage`, so pressing
  * the button doesn't also forward a click to the remote desktop.
  */
-function bindTap(el, fn) {
+function bindTap(el, fn, signal) {
   let touching = false;
   el.addEventListener('touchstart', e => {
     e.preventDefault(); e.stopPropagation();
     touching = true;
-  }, { passive: false });
+  }, { passive: false, signal });
   el.addEventListener('touchend', e => {
     e.preventDefault(); e.stopPropagation();
     if (touching) { touching = false; fn(); }
-  }, { passive: false });
-  el.addEventListener('touchcancel', () => { touching = false; }, { passive: true });
-  el.addEventListener('mousedown', e => e.stopPropagation());
-  el.addEventListener('click', fn);
+  }, { passive: false, signal });
+  el.addEventListener('touchcancel', () => { touching = false; }, { passive: true, signal });
+  el.addEventListener('mousedown', e => e.stopPropagation(), { signal });
+  el.addEventListener('click', fn, { signal });
 }
 const CH_VIDEO = 1;
 const CH_AUDIO = 4;
@@ -879,6 +879,29 @@ class Viewer {
     this._autoLocked = false;
     this._releasingLock = false;
     this._lastEscAt = 0;
+    // Every handler a session hooks onto the page hangs off this, and _end
+    // aborts it. The buttons and the stage outlive a session, so without it
+    // each reconnect stacked another set: one tap on ⋯ or 🕹 then opened and
+    // closed it again, and every click reached the PC twice.
+    this._ac = new AbortController();
+    // Touch state to drop when the browser loses track of fingers — see
+    // _resetTouches.
+    this._touchResets = new Set();
+  }
+
+  /** addEventListener, undone when the session ends. */
+  _on(target, type, fn, opts = {}) {
+    target.addEventListener(type, fn, { ...opts, signal: this._ac.signal });
+  }
+
+  /** Forget every touch in progress. A phone doesn't always send the touchend
+   * for a finger that was down when the tab went to the background or the
+   * screen rotated, and a control still waiting for that finger to lift
+   * ignored every tap after it. Also lets go of anything those touches held
+   * down on the PC. */
+  _resetTouches() {
+    for (const reset of this._touchResets) reset();
+    this._resetPadTouches && this._resetPadTouches();
   }
 
   async start() {
@@ -907,6 +930,12 @@ class Viewer {
     this._bindControls();
     this._bindKeyboard();
     this._bindJoystick();
+    this._on(document, 'visibilitychange', () => { if (document.hidden) this._resetTouches(); });
+    this._on(window, 'pagehide', () => this._resetTouches());
+    const rotated = () => { this._resetTouches(); this._layoutPad(); };
+    if (screen.orientation) this._on(screen.orientation, 'change', rotated);
+    else this._on(window, 'orientationchange', rotated);
+    this._on(window, 'resize', () => this._layoutPad());
     this._syncSoundButton();
     if (!this.isTouch) {
       // "Keys" only exists to summon a phone's soft keyboard — meaningless
@@ -927,7 +956,9 @@ class Viewer {
       $('[data-act="mode"]').hidden = true;
     }
     // Controls start hidden — only the small ⋯ button in the corner is
-    // ever on screen by default; see _bindControls().
+    // ever on screen by default; see _bindControls(). (Leaving from the menu
+    // would otherwise carry it over, open, into the next session.)
+    this._hideControls();
     // Grab keyboard focus immediately — no-op on a phone (mobile browsers
     // only summon the soft keyboard from a focus that happens inside a
     // direct tap), but on a laptop it means typing works right away.
@@ -1001,13 +1032,10 @@ class Viewer {
     $('#hud').textContent = '';
     this._releaseMoveKeys && this._releaseMoveKeys();
     this._releasePad && this._releasePad();
-    // Release anything still held, then unhook — these live on `window`, so
-    // without this a second session would stack another set of listeners on
-    // top and send every keystroke twice.
+    // Release anything still held, then unhook every handler this session
+    // added (see _ac in the constructor).
     this._releaseKeys && this._releaseKeys();
-    if (this._onKeyDown) window.removeEventListener('keydown', this._onKeyDown);
-    if (this._onKeyUp) window.removeEventListener('keyup', this._onKeyUp);
-    if (this._releaseKeys) window.removeEventListener('blur', this._releaseKeys);
+    this._ac.abort();
     if (this._lookPending) { cancelAnimationFrame(this._lookPending); this._lookPending = 0; }
     if (document.pointerLockElement === $('#stage')) document.exitPointerLock();
     try { this._wake && this._wake.release(); } catch {}
@@ -1030,7 +1058,12 @@ class Viewer {
       // 'direct' (tap where you point), 'camera' (drag turns the camera), or
       // 'chosen' (whatever pointer mode is picked in the ⋯ menu).
       const free = (GAME_MODES[store.settings.game] || GAME_MODES.minecraft).freeTouch;
-      return free === 'chosen' ? this.mode : free;
+      if (free === 'chosen') return this.mode;
+      // Taps still land where you tap in the game's menus, but only Direct
+      // mode makes the pointer follow your finger: otherwise a drag moves it
+      // like a trackpad ('tap').
+      if (free === 'direct' && this.mode !== 'direct') return 'tap';
+      return free;
     }
     return this.mode;
   }
@@ -1115,15 +1148,20 @@ class Viewer {
       this._releaseMoveKeys();
     };
 
-    zone.addEventListener('touchstart', e => {
+    this._touchResets.add(() => { if (touchId !== null || mouseDown) drop(); });
+
+    this._on(zone, 'touchstart', e => {
       e.preventDefault(); e.stopPropagation();
-      if (touchId !== null) return;
+      if (touchId !== null) {
+        if ([...e.touches].some(t => t.identifier === touchId)) return;
+        drop(); // that finger's touchend never came
+      }
       const t = e.changedTouches[0];
       touchId = t.identifier;
       grab(t.clientX, t.clientY);
     }, { passive: false });
 
-    zone.addEventListener('touchmove', e => {
+    this._on(zone, 'touchmove', e => {
       e.preventDefault(); e.stopPropagation();
       for (const t of e.changedTouches) {
         if (t.identifier === touchId) update(t.clientX, t.clientY);
@@ -1136,23 +1174,23 @@ class Viewer {
         if (t.identifier === touchId) drop();
       }
     };
-    zone.addEventListener('touchend', release, { passive: false });
-    zone.addEventListener('touchcancel', release, { passive: false });
+    this._on(zone, 'touchend', release, { passive: false });
+    this._on(zone, 'touchcancel', release, { passive: false });
 
     // Mouse (laptop): the pad's just a click-and-drag joystick — one
     // "pointer" instead of tracking touch identifiers, and mousemove/up on
     // `window` rather than `zone` so dragging past the small circle (easy
     // to do with a mouse) doesn't freeze the last direction.
     let mouseDown = false;
-    zone.addEventListener('mousedown', e => {
+    this._on(zone, 'mousedown', e => {
       e.preventDefault(); e.stopPropagation();
       mouseDown = true;
       grab(e.clientX, e.clientY);
     });
-    window.addEventListener('mousemove', e => {
+    this._on(window, 'mousemove', e => {
       if (mouseDown) update(e.clientX, e.clientY);
     });
-    window.addEventListener('mouseup', () => { if (mouseDown) drop(); });
+    this._on(window, 'mouseup', () => { if (mouseDown) drop(); });
 
     this._buildPad(pad);
 
@@ -1180,7 +1218,7 @@ class Viewer {
       } else if (on) {
         toast('Game controls on — tap ? for help', 1600);
       }
-    });
+    }, this._ac.signal);
     setVisible(!!store.settings.joystick);
   }
 
@@ -1196,10 +1234,20 @@ class Viewer {
       const r = stage.getBoundingClientRect();
       return { x: t.clientX - r.left, y: t.clientY - r.top };
     };
+    const cancel = () => {
+      clearTimeout(lp); pts.clear(); g = null; twoStart = null;
+      if (this._camHeld) { this.button(1, false); this._camHeld = false; }
+      if (this.dragging) { this.button(0, false); this.dragging = false; }
+    };
+    this._touchResets.add(cancel);
 
-    stage.addEventListener('touchstart', e => {
+    this._on(stage, 'touchstart', e => {
       e.preventDefault();
       sound.unlock(); // resumes sound the browser paused while in the background
+      // A finger we're still tracking isn't on the screen any more: its
+      // touchend was lost. Start over rather than read this as a second finger.
+      const live = new Set([...e.touches].map(t => t.identifier));
+      if ([...pts.keys()].some(id => !live.has(id))) cancel();
       for (const t of e.changedTouches) {
         const p = pos(t);
         pts.set(t.identifier, { ...p, x0: p.x, y0: p.y, t0: performance.now() });
@@ -1213,6 +1261,11 @@ class Viewer {
           const n = this.dec.screenToNorm(first.x, first.y); this.moveTo(n.x, n.y);
         }
         lp = setTimeout(() => {
+          // Hold to drag starts under the finger, e.g. picking up an item.
+          const [held] = pts.values();
+          if (held && this.touchStyle === 'tap') {
+            const n = this.dec.screenToNorm(held.x, held.y); this.moveTo(n.x, n.y);
+          }
           g = 'drag'; this.dragging = true;
           this.button(0, true);
           navigator.vibrate && navigator.vibrate(15);
@@ -1232,7 +1285,7 @@ class Viewer {
       }
     }, { passive: false });
 
-    stage.addEventListener('touchmove', e => {
+    this._on(stage, 'touchmove', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
         const cur = pts.get(t.identifier); if (!cur) continue;
@@ -1301,14 +1354,14 @@ class Viewer {
     }, { passive: false });
 
     const clearOne = id => { pts.delete(id); };
-    stage.addEventListener('touchend', e => {
+    this._on(stage, 'touchend', e => {
       e.preventDefault();
       const now = performance.now();
       for (const t of e.changedTouches) {
         const cur = pts.get(t.identifier);
         if (g === 'pending' && cur && now - cur.t0 < 250 &&
             Math.hypot(cur.x - cur.x0, cur.y - cur.y0) < 8) {
-          if (this.touchStyle === 'direct' || this.touchStyle === 'camera') {
+          if (['direct', 'camera', 'tap'].includes(this.touchStyle)) {
             const n = this.dec.screenToNorm(cur.x, cur.y); this.moveTo(n.x, n.y);
           }
           this.click(0);
@@ -1329,11 +1382,7 @@ class Viewer {
       else if (pts.size === 1) { g = 'pending'; }
     }, { passive: false });
 
-    stage.addEventListener('touchcancel', () => {
-      clearTimeout(lp); pts.clear(); g = null; twoStart = null;
-      if (this._camHeld) { this.button(1, false); this._camHeld = false; }
-      if (this.dragging) { this.button(0, false); this.dragging = false; }
-    });
+    this._on(stage, 'touchcancel', cancel);
   }
 
   /* ── real mouse (laptop/desktop browsers) ──
@@ -1359,7 +1408,7 @@ class Viewer {
       return this.dec.screenToNorm(clientX - r.left, clientY - r.top);
     };
 
-    stage.addEventListener('mousemove', e => {
+    this._on(stage, 'mousemove', e => {
       // Locked (mouse-look): the OS cursor is hidden and pinned in place,
       // so clientX/Y stop being meaningful — accumulate the raw relative
       // delta instead, same as a real mouse feeding a game's captured-cursor
@@ -1397,7 +1446,7 @@ class Viewer {
       this.moveTo(n.x, n.y);
     });
 
-    stage.addEventListener('mousedown', e => {
+    this._on(stage, 'mousedown', e => {
       e.preventDefault();
       sound.unlock();
       // A laptop has a real keyboard — typing should just work while
@@ -1430,7 +1479,7 @@ class Viewer {
 
     // On window, not just the stage — releasing outside the video (having
     // dragged past its edge) must still lift the button on the host.
-    window.addEventListener('mouseup', e => {
+    this._on(window, 'mouseup', e => {
       const btn = mapButton(e.button);
       if (!held.has(btn)) return;
       held.delete(btn);
@@ -1441,9 +1490,9 @@ class Viewer {
       if (btn === 1) this._relativeDrag = false;
     });
 
-    stage.addEventListener('contextmenu', e => e.preventDefault());
+    this._on(stage, 'contextmenu', e => e.preventDefault());
 
-    stage.addEventListener('wheel', e => {
+    this._on(stage, 'wheel', e => {
       e.preventDefault();
       const inv = store.settings.invertScroll ? -1 : 1;
       this.conn.send(enc_scroll(e.deltaX / 100, (-e.deltaY / 100) * inv, this.cursor.x, this.cursor.y));
@@ -1452,7 +1501,7 @@ class Viewer {
     // The browser can drop pointer lock on its own (Esc, alt-tab, losing
     // focus) as well as from our own exitPointerLock() call — one handler
     // for both keeps the button/toast in sync with reality either way.
-    document.addEventListener('pointerlockchange', () => {
+    this._on(document, 'pointerlockchange', () => {
       if (V !== this) return;
       const locked = document.pointerLockElement === stage;
       $('#mode-btn')?.classList.toggle('on', locked);
@@ -1473,7 +1522,7 @@ class Viewer {
       }
       toast(locked ? 'Mouse look on — Esc to release' : 'Mouse look off', 1400);
     });
-    document.addEventListener('pointerlockerror', () => toast('Mouse look unavailable here', 1800));
+    this._on(document, 'pointerlockerror', () => toast('Mouse look unavailable here', 1800));
   }
 
   /* ── game pad, built from the active game mode ── */
@@ -1494,11 +1543,18 @@ class Viewer {
     // toggles latch instead, since no thumb can hold Sprint while also
     // walking and aiming. Each element tracks its own touch, so several can
     // be held at once.
+    // Only the current buttons: a rebuilt pad drops the old ones.
+    const padResets = new Set();
+    this._resetPadTouches = () => { for (const reset of padResets) reset(); };
     const bindTouch = (el, onDown, onUp) => {
       let id = null;
+      padResets.add(() => { if (id !== null) { id = null; onUp(); } });
       el.addEventListener('touchstart', e => {
         e.preventDefault(); e.stopPropagation();
-        if (id !== null) return;
+        if (id !== null) {
+          if ([...e.touches].some(t => t.identifier === id)) return;
+          id = null; onUp(); // that finger's touchend never came
+        }
         const t = e.changedTouches[0];
         id = t.identifier;
         onDown(t);
@@ -1739,7 +1795,7 @@ class Viewer {
     const menuToggle = $('#btn-controls-toggle');
     bindTap(menuToggle, () => {
       $('#controls').classList.contains('hidden') ? this._showControls() : this._hideControls();
-    });
+    }, this._ac.signal);
 
     $('#controls').onclick = e => {
       const act = e.target.closest('.ctl')?.dataset.act; if (!act) return;
@@ -1797,7 +1853,7 @@ class Viewer {
 
   _bindKeyboard() {
     const k = $('#kbd');
-    k.addEventListener('input', e => {
+    this._on(k, 'input', e => {
       if (e.inputType === 'insertText' && e.data) this.conn.send(enc_text(e.data));
       else if (e.inputType === 'insertLineBreak') this.tap(13);
       else if (e.inputType === 'deleteContentBackward') this.tap(8);
@@ -1831,10 +1887,8 @@ class Viewer {
       }
       this.key(vk, pressed);
     };
-    this._onKeyDown = e => onKey(e, true);
-    this._onKeyUp = e => onKey(e, false);
-    window.addEventListener('keydown', this._onKeyDown);
-    window.addEventListener('keyup', this._onKeyUp);
+    this._on(window, 'keydown', e => onKey(e, true));
+    this._on(window, 'keyup', e => onKey(e, false));
 
     // Losing focus mid-hold (alt-tab out, screen lock) would otherwise leave
     // the key held down on the host with nothing left to release it.
@@ -1842,10 +1896,10 @@ class Viewer {
       for (const vk of down) this.key(vk, false);
       down.clear();
     };
-    window.addEventListener('blur', this._releaseKeys);
+    this._on(window, 'blur', this._releaseKeys);
     // clipboard → host on focus
     if (store.settings.clip && navigator.clipboard) {
-      window.addEventListener('focus', async () => {
+      this._on(window, 'focus', async () => {
         try {
           const t = await navigator.clipboard.readText();
           if (t && t !== this._lastClip) { this._lastClip = t; this.conn.send(enc_clipboard(t)); }
