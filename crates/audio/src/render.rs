@@ -56,6 +56,19 @@ pub fn render_mic(stop: &AtomicBool, rx: &Receiver<MicPacket>) {
     }
 }
 
+/// Whether a virtual audio cable (a render device with "cable" in its name,
+/// e.g. VB-CABLE's "CABLE Input") is installed — i.e. whether a phone's mic
+/// can actually show up as a microphone ("CABLE Output") in Discord or a game.
+pub fn has_virtual_cable() -> bool {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) else {
+            return false;
+        };
+        pick_device(&enumerator).map(|(_, cable)| cable).unwrap_or(false)
+    }
+}
+
 /// Pick a render endpoint: prefer one whose friendly name contains "cable"
 /// (a virtual audio cable's input side), else this PC's default output.
 /// Returns whether a cable device was found.

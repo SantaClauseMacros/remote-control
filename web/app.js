@@ -2055,7 +2055,7 @@ class Viewer {
         const on = !store.settings.mic;
         store.settings = { ...store.settings, mic: on };
         this._syncMicButton();
-        if (on) { toast('Sharing microphone with the PC', 1800); this.mic.start(); }
+        if (on) { toast('Sharing mic with the PC — in Discord pick "CABLE Output" as the mic', 3200); this.mic.start(); }
         else { toast('Microphone off', 1400); this.mic.stop(); }
       }
       else if (act === 'files') $('#file-picker').click();

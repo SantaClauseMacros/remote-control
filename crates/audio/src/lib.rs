@@ -17,4 +17,4 @@ pub mod render;
 #[cfg(windows)]
 pub use loopback::stream_loopback;
 #[cfg(windows)]
-pub use render::render_mic;
+pub use render::{has_virtual_cable, render_mic};

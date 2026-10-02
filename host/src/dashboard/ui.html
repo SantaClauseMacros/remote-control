@@ -296,7 +296,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
     <div class="card">
       <h2>Features</h2>
       <label class="set-row"><div class="txt"><b>Stream sound</b><span class="dim small">Play this PC's sound on the connected device (applies to the next connection)</span></div><input type="checkbox" class="switch" data-setting="streamAudio"></label>
-      <label class="set-row"><div class="txt"><b>Microphone</b><span class="dim small">Let a connected device's microphone play on this PC. Without a virtual audio cable installed, it plays out loud on your speakers rather than being usable as a mic elsewhere — see the README.</span></div><input type="checkbox" class="switch" data-setting="micEnabled"></label>
+      <label class="set-row"><div class="txt"><b>Microphone</b><span class="dim small">Play a connected device's microphone out loud on this PC's speakers (for testing). With a virtual microphone installed (see the Overview checklist) this isn't needed — it goes to "CABLE Output" automatically.</span></div><input type="checkbox" class="switch" data-setting="micEnabled"></label>
       <label class="set-row"><div class="txt"><b>Clipboard sync</b><span class="dim small">Share copied text both ways while connected</span></div><input type="checkbox" class="switch" data-setting="clipboardSync"></label>
       <label class="set-row"><div class="txt"><b>Show on local network</b><span class="dim small">Lets the desktop viewer find this PC by name</span></div><input type="checkbox" class="switch" data-setting="lanDiscovery"></label>
       <label class="set-row"><div class="txt"><b>Check for updates</b><span class="dim small">Get a notification when a new version is out</span></div><input type="checkbox" class="switch" data-setting="updateChecks"></label>
@@ -584,6 +584,8 @@ function renderChecks() {
   if (s.autostart) add('ok', 'Starts with Windows', "You'll still be able to connect after a restart.");
   else add('warn', "Doesn't start with Windows", "If the PC restarts, you won't be able to connect until someone opens Remote Control.", ['Turn on', () => saveSetting('startWithWindows', true)]);
   if (s.session && !s.session.hardwareEncoder) add('warn', 'Using slower CPU video encoding', 'Your graphics card encoder is busy or unavailable. Closing Parsec, OBS or ShadowPlay usually frees it.');
+  if (s.virtualMic) add('ok', 'Phone mic works in Discord & games', 'A virtual microphone is installed. In Discord / your game, set the microphone to "CABLE Output", then tap ⋯ → Mic on your phone.');
+  else add('info', 'Phone mic needs a virtual microphone', 'Windows can not turn a phone into a mic by itself. This installs VB-CABLE (free) — then pick "CABLE Output" as the mic in Discord. Restart the PC afterwards.', ['Install virtual microphone', () => action('installVirtualMic')]);
   if (s.elevated) add('ok', 'Running as Administrator', 'You can control Task Manager and admin prompts.');
   else add('info', 'Admin windows need Administrator', "Task Manager and admin prompts ignore remote clicks unless Remote Control runs as Administrator.", ['Restart as Administrator', () => action('restartAdmin')]);
   const ul = $('#checks');
@@ -692,6 +694,7 @@ async function loadActivity() {
 /* ── actions ── */
 async function action(name) {
   if (name === 'restartAdmin' && !await confirmBox('Restart as Administrator?', 'Windows will ask for permission. Any connected device will be disconnected for a few seconds.', 'Restart')) return;
+  if (name === 'installVirtualMic' && !await confirmBox('Install the virtual microphone?', 'This downloads VB-CABLE (a free virtual audio cable from vb-audio.com) and runs its installer. Windows will ask for permission, and you should restart the PC afterwards.', 'Install')) return;
   if (name === 'exit' && !await confirmBox('Exit Remote Control?', "Nobody will be able to connect to this PC until it's started again.", 'Exit')) return;
   try {
     const r = await api('/api/action', { action: name });

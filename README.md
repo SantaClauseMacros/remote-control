@@ -65,7 +65,7 @@ Click the tray icon to open it.
 
 **Sound:** you hear the PC on your phone automatically. Tap **⋯ → Sound** to mute. (On iPhone, turn the silent switch off.)
 
-**Microphone:** tap **⋯ → Mic** to send your phone's mic to the PC. Turn on **Microphone** in the PC app's Settings first. Without a virtual audio cable installed on the PC, it just plays out loud through its speakers rather than being usable as a mic in Discord or a game — see [Using it as an actual PC microphone](#using-your-phones-mic-as-a-pc-microphone) below.
+**Microphone:** tap **⋯ → Mic** to send your phone's mic to the PC. To use it as an actual microphone in Discord or a game, the PC needs a virtual microphone — the PC app's **Overview** checklist has an **Install virtual microphone** button (see [Using it as an actual PC microphone](#using-your-phones-mic-as-a-pc-microphone) below).
 
 **Send a file:** tap **⋯ → Send file** to upload something from your phone straight to the PC's `Downloads\RemoteControl` folder. The PC app can send files back the same way (Home, while connected → **Send a file to this device**).
 
@@ -99,12 +99,11 @@ Tap **?** for the full list. If the hotbar targets don't line up, set **Hotbar s
 
 Windows has no built-in way to turn incoming audio into a microphone other apps can select — it needs one free, one-time driver:
 
-1. Install [VB-CABLE](https://vb-audio.com/Cable/) (free) on the PC and reboot.
-2. In the PC app's **Settings → Features**, turn on **Microphone**.
-3. In whatever app you want to talk in (Discord, a game), set its microphone to **CABLE Output**.
-4. On your phone, tap **⋯ → Mic**.
+1. In the PC app, open **Overview** and press **Install virtual microphone** under *Phone mic needs a virtual microphone* (it downloads [VB-CABLE](https://vb-audio.com/Cable/), free, and runs its installer — approve the Windows prompt). Or install VB-CABLE yourself. Then restart the PC.
+2. In Discord (or your game), set the microphone to **CABLE Output**.
+3. On your phone, tap **⋯ → Mic**. That's it — no setting to turn on; with VB-CABLE installed your voice goes only to "CABLE Output", never out of the speakers.
 
-Without VB-CABLE installed, the mic toggle still works — your phone's mic just plays out loud through the PC's speakers instead, which is fine for testing but not for voice chat (everyone would hear an echo).
+Without VB-CABLE installed, the PC app's **Settings → Features → Microphone** switch plays your phone's mic out loud through the PC's speakers instead, which is fine for testing but not for voice chat (everyone would hear an echo).
 
 ---
 

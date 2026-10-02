@@ -476,7 +476,13 @@ pub async fn run(
     // ── mic playback (device → PC) ─────────────────────────────────────────
     let mic_stop = Arc::new(AtomicBool::new(false));
     let (mic_render_tx, mic_render_rx) = std_mpsc::sync_channel::<rc_audio::render::MicPacket>(8);
-    if params.mic {
+    // On when the user enabled the Microphone setting, or whenever a virtual
+    // audio cable is installed: with one, the phone's mic goes to "CABLE
+    // Output" (what Discord / a game picks as its microphone) and never out
+    // of the speakers, so there's nothing to opt in to. Without one, the
+    // setting stays the opt-in for the play-on-speakers fallback.
+    let mic_on = params.mic || rc_audio::has_virtual_cable();
+    if mic_on {
         let ms = mic_stop.clone();
         std::thread::Builder::new()
             .name("rc-mic".into())
@@ -551,7 +557,7 @@ pub async fn run(
                 Ok(_) => tracing::warn!("a direct path authenticated a different device; ignored"),
                 Err(e) => tracing::info!(error = %e, "direct connection didn't come up; staying on the relay"),
             },
-            mic = cur.recv_mic(), if params.mic => {
+            mic = cur.recv_mic(), if mic_on => {
                 if let Ok(packet) = mic {
                     if let Some(d) = rc_audio::adpcm::decode(&packet) {
                         let _ = mic_render_tx.try_send((d.samples, d.sample_rate, d.channels));
