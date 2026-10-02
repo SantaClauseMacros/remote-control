@@ -31,6 +31,10 @@ pub struct Settings {
     /// Mirrors the platform autostart entry so the UI can show its state.
     /// The registry is the source of truth; this is reconciled on startup.
     pub start_with_windows: bool,
+    /// Always open as Administrator (no UAC prompt after the first time) - see
+    /// `platform::admin_task`. Lets remote input reach Task Manager, UAC
+    /// dialogs and other elevated windows.
+    pub run_as_admin: bool,
     pub performance: PerformanceSettings,
     pub network: NetworkSettings,
     pub security: SecuritySettings,
@@ -156,6 +160,7 @@ impl Default for Settings {
             computer_name: default_computer_name(),
             enable_remote_access: true,
             start_with_windows: false,
+            run_as_admin: false,
             performance: PerformanceSettings::default(),
             network: NetworkSettings::default(),
             security: SecuritySettings::default(),

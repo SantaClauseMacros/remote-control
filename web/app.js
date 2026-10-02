@@ -4,9 +4,22 @@ import init, {
   enc_scroll, enc_key, enc_text,
   enc_ping, enc_clipboard, enc_quality, enc_disconnect, enc_direct_offer, enc_direct_use,
   enc_gamepad_state, enc_gamepad_disconnect, enc_file_offer, enc_file_chunk, enc_file_done,
+  enc_request_info, enc_list_dir, enc_get_file, enc_paste_files,
   decode_host_message, parse_video_payload, avc_codec_string, is_keyframe,
   ack_ok, ack_host_offline, ack_bad_key,
 } from './pkg/rc_web.js';
+
+/** This web app's version - compared with the PC app's to say "update the PC". */
+const APP_VERSION = '0.7.0';
+const verLess = (a, b) => {
+  const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0);
+  }
+  return false;
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
 
 const b64 = {
   enc: (u8) => btoa(String.fromCharCode(...u8)),
@@ -153,6 +166,8 @@ class MicCapture {
     this.ctx = null;
     this.node = null;
     this.stream = null;
+    this.level = 0;      // 0..1, how loud the mic is right now (for the meter)
+    this.lastAudio = 0;  // when the browser last handed us mic audio
   }
   get active() { return !!this.node; }
   async start() {
@@ -173,13 +188,19 @@ class MicCapture {
     const state = { predictor: 0, index: 0 };
     const src = this.ctx.createMediaStreamSource(stream);
     this.node = this.ctx.createScriptProcessor(2048, 1, 1);
+    this.lastAudio = performance.now();
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
     this.node.onaudioprocess = e => {
       const input = e.inputBuffer.getChannelData(0);
       const pcm = new Int16Array(input.length);
+      let sum = 0;
       for (let i = 0; i < input.length; i++) {
         const s = Math.max(-1, Math.min(1, input[i]));
         pcm[i] = s < 0 ? s * 32768 : s * 32767;
+        sum += s * s;
       }
+      this.level = Math.min(1, Math.sqrt(sum / input.length) * 5);
+      this.lastAudio = performance.now();
       this.conn.sendMic(encodeAdpcmMono(pcm, this.ctx.sampleRate, state));
     };
     src.connect(this.node);
@@ -192,6 +213,7 @@ class MicCapture {
     silence.connect(this.ctx.destination);
   }
   stop() {
+    this.level = 0;
     if (this.node) { this.node.disconnect(); this.node.onaudioprocess = null; this.node = null; }
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
     if (this.ctx) { this.ctx.close().catch(() => {}); this.ctx = null; }
@@ -241,7 +263,7 @@ const store = {
   set devices(v) { localStorage.rc_devices = JSON.stringify(v); },
   get settings() {
     return Object.assign(
-      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true, muted: false, direct: true, mic: false },
+      { relay: '', relayKey: '', sens: 1.4, clip: false, invertScroll: false, mode: 'trackpad', joystick: true, muted: false, direct: true, mic: false, autoKeyboard: true },
       (() => { try { return JSON.parse(localStorage.rc_settings || '{}'); } catch { return {}; } })());
   },
   set settings(v) { localStorage.rc_settings = JSON.stringify(v); },
@@ -377,6 +399,8 @@ $('#btn-settings').onclick = () => {
   f.relay.value = s.relay; f.relayKey.value = s.relayKey;
   f.sens.value = s.sens; f.clip.checked = s.clip; f.invertScroll.checked = s.invertScroll;
   f.direct.checked = s.direct !== false;
+  f.mic.checked = !!s.mic;
+  f.autoKeyboard.checked = s.autoKeyboard !== false;
   sdlg.showModal();
 };
 sdlg.addEventListener('close', () => {
@@ -386,6 +410,7 @@ sdlg.addEventListener('close', () => {
     relay: f.relay.value.trim(), relayKey: f.relayKey.value.trim(),
     sens: parseFloat(f.sens.value), clip: f.clip.checked, invertScroll: f.invertScroll.checked,
     direct: f.direct.checked,
+    mic: f.mic.checked, autoKeyboard: f.autoKeyboard.checked,
   };
   renderList();
 });
@@ -411,6 +436,9 @@ class Conn {
     this.direct = null;
     this._directWait = null;
     this.relayDown = false;
+    // When anything last arrived from the PC (it streams video and answers
+    // pings constantly) - the viewer's watchdog reads this.
+    this.lastRx = performance.now();
     this.onvideo = () => {}; this.onhost = () => {}; this.onclose = () => {}; this.onpaired = () => {};
     this.ondirect = () => {};
   }
@@ -551,9 +579,15 @@ class Conn {
       if (!this.direct) { try { pc && pc.close(); } catch {} }
     }
   }
+  /** Bytes queued to send on the path in use - uploads wait on this. */
+  buffered() {
+    const d = this.direct;
+    return d && d.live ? d.dc.bufferedAmount : (this.ws ? this.ws.bufferedAmount : 0);
+  }
   _onDirect(bytes) {
     const d = this.direct;
     if (!d || !d.live) return;
+    this.lastRx = performance.now();
     try {
       this._drain(d.sess.feed(bytes), true);
       for (const reply of d.sess.take_keepalive_replies()) d.dc.send(reply);
@@ -572,6 +606,7 @@ class Conn {
     this.requestKeyframe();
   }
   _rx(bytes) {
+    this.lastRx = performance.now();
     try {
       if (this.phase === 'hello') {
         const ack = bytes[0];
@@ -947,6 +982,13 @@ class Viewer {
   constructor(device) {
     this.device = device;
     this.conn = new Conn(device);
+    this.wasLive = false;        // reached a working session at least once
+    this.autoAttempt = null;     // set by connect() for automatic reconnects
+    this.hostInfo = null;        // the PC app's reply to enc_request_info
+    this.hostOld = false;        // ...or it never answered: needs updating
+    this.textFocus = false;      // PC keyboard focus is in a text box
+    this.micStatus = null;       // last mic report from the PC
+    this.br = null;              // PC file browser state
     this.dec = new Decoder($('#screen'));
     this.dec.onNeedKeyframe = () => this.conn.requestKeyframe();
     this.dec.onPlaced = () => this._layoutPad();
@@ -1011,8 +1053,10 @@ class Viewer {
   async start() {
     show('connecting');
     $('#connecting-text').textContent = `Connecting to ${this.device.name}…`;
-    this.conn.onopen = () => { show('viewer'); this._afterConnect(); };
-    this.conn.onclose = (reason) => this._end(reason);
+    this.conn.onopen = () => { this.wasLive = true; stopReconnect(); show('viewer'); this._afterConnect(); };
+    // A link that drops mid-session reconnects by itself; a connection that
+    // never got going only does so when this was already an automatic retry.
+    this.conn.onclose = (reason) => this._end(reason, { reconnect: this.wasLive });
     this.conn.onvideo = (au, key, ts) => this.dec.push(au, key, ts);
     this.conn.onhost = (m) => this._host(m);
     this.conn.ondirect = (on) => {
@@ -1036,6 +1080,7 @@ class Viewer {
     this._bindJoystick();
     this._bindGamepad();
     this._bindFiles();
+    this._bindBrowser();
     this.mic = new MicCapture(this.conn);
     this._syncMicButton();
     if (store.settings.mic) this.mic.start();
@@ -1092,6 +1137,12 @@ class Viewer {
       if (this.dec.errors) bits.push(`${this.dec.errors} err`);
       $('#hud').textContent = bits.join(' · ');
     }, 1000);
+    this._startHealth();
+    bindTap($('#kbd-pill'), () => {
+      const k = $('#kbd');
+      k.blur(); k.focus({ preventScroll: true });   // inside a real tap: iOS allows it
+      $('#kbd-pill').hidden = true;
+    }, this._ac.signal);
     // keep screen awake
     if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => (this._wake = w)).catch(() => {});
     toast('connected');
@@ -1112,6 +1163,93 @@ class Viewer {
     else if (m.kind === 'fileoffer') this._fileOffer(m);
     else if (m.kind === 'filechunk') this._fileChunk(m);
     else if (m.kind === 'filedone') this._fileDone(m);
+    else if (m.kind === 'textfocus') this._onTextFocus(!!m.focused);
+    else if (m.kind === 'info') {
+      this.hostInfo = m;
+      clearTimeout(this._infoTimer);
+      if (verLess(m.version, APP_VERSION)) this._pcOutdated();
+    }
+    else if (m.kind === 'micstatus')
+      this.micStatus = { receiving: m.receiving, virtual_cable: m.virtual_cable, at: performance.now() };
+    else if (m.kind === 'dirlisting') this._browserShow(m);
+  }
+
+  /* ── connection health, PC info, banner ── */
+  _startHealth() {
+    this.conn.send(enc_request_info());
+    // A PC app too old to know the question never answers - that's how we
+    // know it needs an update.
+    this._infoTimer = setTimeout(() => { if (!this.hostInfo) this._pcOutdated(); }, 4000);
+    // Watchdog. The PC sends video and answers pings all the time, so a long
+    // silence means the link died (wifi dropped) even though the socket can
+    // go on claiming to be open for minutes.
+    this._watch = setInterval(() => {
+      if (document.hidden) return;
+      if (performance.now() - this.conn.lastRx > 9000)
+        this._end('Connection lost - reconnecting…', { reconnect: true });
+    }, 1000);
+    this._on(window, 'offline', () => this._end('Wi-Fi dropped - will reconnect when it is back', { reconnect: true }));
+    this._on(document, 'visibilitychange', () => {
+      // Timers were paused while hidden - give the link a fresh chance.
+      if (!document.hidden) { this.conn.lastRx = performance.now(); this.conn.send(enc_ping(performance.now())); }
+    });
+    this._level = setInterval(() => this._micTick(), 150);
+    const status = $('#mic-status');
+    bindTap(status, () => { if (this.mic) { this.mic.stop(); this.mic.start(); } }, this._ac.signal);
+    bindTap($('#banner'), () => runSetupCheck(), this._ac.signal);
+  }
+  _pcOutdated() {
+    if (this.hostOld) return;
+    this.hostOld = true;
+    this._banner('Your PC app is out of date - tap to see how to update it');
+  }
+  _banner(text) {
+    const b = $('#banner');
+    b.textContent = text;
+    b.hidden = !text;
+  }
+
+  /* ── mic meter + status ── */
+  _micTick() {
+    const btn = $('#mic-btn'), el = $('#mic-status');
+    if (!btn || !el) return;
+    const on = store.settings.mic && this.mic && this.mic.active;
+    btn.style.setProperty('--lvl', on ? this.mic.level : 0);
+    if (!on) { el.hidden = true; return; }
+    const m = this.mic, now = performance.now();
+    if (m.ctx && m.ctx.state === 'suspended') m.ctx.resume().catch(() => {});
+    let text, bad = true;
+    if (now - m.lastAudio > 2500) text = 'Phone paused the mic - tap to restart';
+    else if (this.hostOld) text = 'PC app is out of date - mic may not work';
+    else if (!this.micStatus || now - this.micStatus.at > 4000 || !this.micStatus.receiving)
+      text = 'PC is not receiving the mic - tap to restart';
+    else if (!this.micStatus.virtual_cable) text = 'Mic plays on the PC speakers - install the virtual mic (PC app > Overview)';
+    else { text = 'Mic live - pick "CABLE Output" in Discord'; bad = false; }
+    el.textContent = '🎙 ' + text;
+    el.classList.toggle('bad', bad);
+    el.hidden = false;
+  }
+
+  /* ── PC text box focus -> phone keyboard ── */
+  _onTextFocus(on) {
+    this.textFocus = on;
+    if (store.settings.autoKeyboard === false) return;
+    const k = $('#kbd'), pill = $('#kbd-pill');
+    clearTimeout(this._pillT);
+    if (on) {
+      try { k.focus({ preventScroll: true }); } catch {}
+      // iPhones only open the keyboard from a real tap, so if it didn't come
+      // up, offer a one-tap button (hidden once the keyboard shows).
+      if (this.isTouch) {
+        this._pillT = setTimeout(() => {
+          const vv = window.visualViewport;
+          pill.hidden = !!(vv && vv.height < window.innerHeight * 0.8);
+        }, 500);
+      }
+    } else {
+      pill.hidden = true;
+      try { k.blur(); } catch {}
+    }
   }
 
   /** A game on the host grabbed (or let go of) the mouse. While it holds it,
@@ -1139,9 +1277,18 @@ class Viewer {
     }
   }
 
-  _end(reason) {
+  _end(reason, opts = {}) {
     clearInterval(this._ping);
     clearInterval(this._hud);
+    clearInterval(this._watch);
+    clearInterval(this._level);
+    clearTimeout(this._infoTimer);
+    clearTimeout(this._brTimer);
+    clearTimeout(this._pillT);
+    this._banner('');
+    $('#kbd-pill').hidden = true;
+    $('#mic-status').hidden = true;
+    $('#browser').hidden = true;
     $('#hud').textContent = '';
     this._releaseMoveKeys && this._releaseMoveKeys();
     this._releasePad && this._releasePad();
@@ -1160,6 +1307,11 @@ class Viewer {
     show('list');
     if (reason) toast(reason, 2600);
     renderList();
+    // Lost connection (or a failed automatic retry): keep trying on its own.
+    // Leaving on purpose - Leave, Cancel, the PC saying goodbye - never does.
+    const retry = opts.reconnect || (this.autoAttempt != null && !this.wasLive && !opts.final);
+    if (retry) scheduleReconnect(this.device, opts.reconnect ? 1 : this.autoAttempt + 1);
+    else stopReconnect();
   }
 
   /** How a one-finger drag or tap on the video behaves right now. With the
@@ -1218,9 +1370,10 @@ class Viewer {
     const zone = $('#joystick');
     const pad = $('#pad');
     const toggle = $('#btn-joystick-toggle');
-    if (!this.isTouch) {
-      // Real mouse + keyboard: nothing here applies, and no toggle for a
-      // feature that isn't there.
+    if (!this.isTouch || this.hasMouse) {
+      // A PC, laptop or Chromebook (a mouse/trackpad is attached, even on a
+      // touchscreen one): the pointer and keyboard already do all of this,
+      // so no game-pad toggle for a feature that isn't there.
       zone.hidden = true; pad.hidden = true; toggle.hidden = true;
       return;
     }
@@ -1392,30 +1545,147 @@ class Viewer {
     btn.classList.toggle('on', on);
   }
 
-  /* ── send a file to the PC ── */
+  /* ── send files to the PC (one or many) ── */
   _bindFiles() {
     const input = $('#file-picker');
+    input.multiple = true;
     this._on(input, 'change', async () => {
-      const file = input.files && input.files[0];
+      const files = Array.from(input.files || []);
       input.value = '';
-      if (file) await this._sendFile(file);
+      if (files.length) await this._sendFiles(files);
     });
   }
-  async _sendFile(file) {
+  async _sendFiles(files) {
+    // If the PC's cursor is in a text box, pictures go straight into it
+    // (pasted) rather than just landing in the Downloads folder.
+    const paste = this.textFocus && !this.hostOld;
+    const pasteIds = [];
+    let i = 0;
+    for (const file of files) {
+      i++;
+      const id = await this._sendFile(file, i, files.length);
+      if (id == null) return;
+      if (paste && file.type.startsWith('image/')) pasteIds.push(id);
+    }
+    if (pasteIds.length) {
+      this.conn.send(enc_paste_files(pasteIds));
+      toast(`Put ${pasteIds.length} pic${pasteIds.length > 1 ? 's' : ''} in the PC's text box`, 2800);
+    } else {
+      toast(files.length > 1 ? `Sent ${files.length} files` : `Sent "${files[0].name}"`, 1800);
+    }
+  }
+  async _sendFile(file, n = 1, of = 1) {
     const id = (Math.random() * 0xffffffff) >>> 0;
     const CHUNK = 32 * 1024;
+    const label = of > 1 ? `(${n}/${of}) ` : '';
     this.conn.send(enc_file_offer(id, file.name, file.size));
-    toast(`Sending "${file.name}"…`, 60000);
-    let offset = 0;
+    let offset = 0, shown = 0;
     while (offset < file.size) {
+      if (this.conn.phase !== 'live') return null;
+      // Don't queue a whole video in memory ahead of a slow link.
+      while (this.conn.buffered() > 1500000) await sleep(15);
       const slice = await file.slice(offset, offset + CHUNK).arrayBuffer();
       this.conn.send(enc_file_chunk(id, offset, new Uint8Array(slice)));
       offset += slice.byteLength;
       if (slice.byteLength === 0) break; // shouldn't happen, but never loop forever
+      if (performance.now() - shown > 400) {
+        shown = performance.now();
+        toast(`Sending ${label}"${file.name}" ${Math.round(offset / file.size * 100)}%`, 60000);
+      }
     }
     this.conn.send(enc_file_done(id));
-    toast(`Sent "${file.name}"`, 1800);
+    return id;
   }
+
+  /* ── browse the PC's files and download them to this device ── */
+  _bindBrowser() {
+    const root = $('#browser');
+    bindTap($('#br-close'), () => this._browserClose(), this._ac.signal);
+    bindTap($('#br-up'), () => {
+      if (!this.br) return;
+      if (this.br.parent == null) this._browserClose();
+      else this._browserGo(this.br.parent);
+    }, this._ac.signal);
+    bindTap($('#br-all'), () => {
+      if (!this.br) return;
+      const files = this.br.entries.filter(e => !e.is_dir);
+      const all = files.length > 0 && this.br.sel.size === files.length;
+      this.br.sel = new Set(all ? [] : files.map(e => e.name));
+      this._browserRender();
+    }, this._ac.signal);
+    bindTap($('#br-get'), () => {
+      if (!this.br || !this.br.sel.size) return;
+      if (this.hostOld) return toast('Update the PC app first');
+      const names = [...this.br.sel];
+      names.forEach((n, i) => setTimeout(() => this.conn.send(enc_get_file(this._brFull(n))), i * 150));
+      toast(`Downloading ${names.length} file${names.length > 1 ? 's' : ''}…`, 2500);
+      this.br.sel = new Set();
+      this._browserRender();
+    }, this._ac.signal);
+    root.hidden = true;
+  }
+  _browserOpen() {
+    $('#browser').hidden = false;
+    this._browserGo('');
+  }
+  _browserClose() {
+    $('#browser').hidden = true;
+    clearTimeout(this._brTimer);
+    this.br = null;
+  }
+  _brFull(name) {
+    const p = this.br.path;
+    if (!p) return name;               // the start list holds full paths
+    return p.endsWith('\\') ? p + name : p + '\\' + name;
+  }
+  _browserGo(path) {
+    this.br = { path, parent: null, entries: [], sel: new Set(), loading: true, error: null };
+    this._browserRender();
+    this.conn.send(enc_list_dir(path));
+    clearTimeout(this._brTimer);
+    this._brTimer = setTimeout(() => {
+      if (!this.br || !this.br.loading) return;
+      this.br.loading = false;
+      this.br.error = this.hostInfo ? 'The PC did not answer' : 'Your PC app is out of date - update it to browse files';
+      this._browserRender();
+    }, 5000);
+  }
+  _browserShow(m) {
+    if (!this.br) return;
+    clearTimeout(this._brTimer);
+    Object.assign(this.br, { loading: false, path: m.path, parent: m.parent, entries: m.entries, error: m.error, sel: new Set() });
+    this._browserRender();
+  }
+  _browserRender() {
+    const b = this.br; if (!b) return;
+    $('#br-path').textContent = b.path || 'This PC';
+    const list = $('#br-list');
+    list.textContent = '';
+    if (b.loading) { list.append(Object.assign(document.createElement('div'), { className: 'empty dim', textContent: 'Loading…' })); }
+    else if (b.error) { list.append(Object.assign(document.createElement('div'), { className: 'empty dim', textContent: b.error })); }
+    else if (!b.entries.length) { list.append(Object.assign(document.createElement('div'), { className: 'empty dim', textContent: 'Empty folder' })); }
+    for (const e of b.entries) {
+      const row = document.createElement('div');
+      row.className = 'br-row' + (b.sel.has(e.name) ? ' sel' : '');
+      const icon = document.createElement('span'); icon.className = 'br-ic'; icon.textContent = e.is_dir ? '📁' : (b.sel.has(e.name) ? '☑' : '📄');
+      const name = document.createElement('span'); name.className = 'br-name';
+      name.textContent = b.path ? e.name : (e.name.split('\\').filter(Boolean).pop() || e.name);
+      const size = document.createElement('span'); size.className = 'br-size dim'; size.textContent = e.is_dir ? '›' : fmtSize(e.size);
+      row.append(icon, name, size);
+      const act = () => {
+        if (e.is_dir) return this._browserGo(this._brFull(e.name));
+        b.sel.has(e.name) ? b.sel.delete(e.name) : b.sel.add(e.name);
+        this._browserRender();
+      };
+      bindTap(row, act, this._ac.signal);
+      list.append(row);
+    }
+    const n = b.sel.size;
+    const get = $('#br-get');
+    get.disabled = n === 0;
+    get.textContent = n ? `Download ${n} file${n > 1 ? 's' : ''}` : 'Download';
+  }
+
   /** A file the host is sending this way, assembled from `filechunk`
    * messages and handed to the browser as a download on `filedone`. */
   _fileChunk(m) {
@@ -2059,6 +2329,8 @@ class Viewer {
         else { toast('Microphone off', 1400); this.mic.stop(); }
       }
       else if (act === 'files') $('#file-picker').click();
+      else if (act === 'browse') this._browserOpen();
+      else if (act === 'check') runSetupCheck();
     };
     $('#quality-sheet').onclick = e => {
       const q = e.target.dataset.q; if (!q) return;
@@ -2142,13 +2414,124 @@ class Viewer {
   }
 }
 
-async function connect(device) {
+/* Automatic reconnect. A phone that loses wifi used to sit on a dead
+ * "connected" screen and then be unable to get back in; now the link is
+ * dropped as soon as it's noticed and retried until it works. */
+let reconnect = null; // { device, attempt, timer }
+function stopReconnect() {
+  if (reconnect) { clearTimeout(reconnect.timer); reconnect = null; }
+}
+function scheduleReconnect(device, attempt, delay) {
+  stopReconnect();
+  if (attempt > 15) { toast('Could not reconnect - tap Connect to try again', 4000); return; }
+  show('connecting');
+  $('#connecting-text').textContent = attempt > 1 ? `Reconnecting to ${device.name}… (try ${attempt})` : `Reconnecting to ${device.name}…`;
+  reconnect = {
+    device, attempt,
+    timer: setTimeout(() => {
+      reconnect = null;
+      // No wifi yet: wait without using up attempts.
+      if (!navigator.onLine) return scheduleReconnect(device, attempt, 2000);
+      connect(device, { auto: true, attempt });
+    }, delay ?? Math.min(2500 * attempt, 8000)),
+  };
+}
+window.addEventListener('online', () => {
+  if (reconnect) { const { device, attempt } = reconnect; scheduleReconnect(device, attempt, 400); }
+});
+
+async function connect(device, opts = {}) {
   sound.unlock(); // still inside the Connect tap — the browser allows it now
+  if (!opts.auto) stopReconnect();
   if (V) V._end();
   V = new Viewer(device);
+  V.autoAttempt = opts.auto ? (opts.attempt || 1) : null;
   await V.start();
 }
-$('#btn-cancel').onclick = () => { if (V) V._end(); };
+$('#btn-cancel').onclick = () => {
+  stopReconnect();
+  if (V) V._end(); else { show('list'); renderList(); }
+};
+
+/* ─────────────────────  home screen: share / fix / check  ───────────── */
+function addCheck(ul, kind, title, detail) {
+  const li = document.createElement('li');
+  const ic = document.createElement('span'); ic.className = 'ic ' + kind;
+  ic.textContent = kind === 'ok' ? '✓' : kind === 'bad' ? '!' : kind === 'warn' ? '!' : 'i';
+  const body = document.createElement('div'); body.className = 'body';
+  const b = document.createElement('b'); b.textContent = title;
+  const d = document.createElement('div'); d.className = 'dim small'; d.textContent = detail;
+  body.append(b, d);
+  li.append(ic, body);
+  ul.append(li);
+}
+async function runSetupCheck() {
+  const dlgC = $('#dlg-check'), ul = $('#check-list');
+  ul.textContent = '';
+  if (!dlgC.open) dlgC.showModal();
+  const add = (k, t, d) => addCheck(ul, k, t, d);
+  add(navigator.onLine ? 'ok' : 'bad', navigator.onLine ? 'This phone is online' : 'This phone has no internet',
+    navigator.onLine ? 'Good.' : 'Connect to Wi-Fi or mobile data first.');
+  const devs = store.devices;
+  if (!devs.length) add('info', 'No PC added yet', 'Tap the + button and enter your PC ID (shown in the PC app).');
+  for (const d of devs) {
+    const on = await checkOnline(d);
+    if (on === true) add('ok', `${d.name} is reachable`, 'The PC is online and waiting for you.');
+    else if (on === false) add('bad', `${d.name} is offline`, 'The PC is off, asleep, or Remote Control is not running on it. Wake it up or start the app on the PC.');
+    else add('warn', `Could not check ${d.name}`, 'The relay did not answer. Check your internet connection and try again.');
+  }
+  const v = V;
+  if (v && v.hostInfo) {
+    if (verLess(v.hostInfo.version, APP_VERSION))
+      add('bad', `PC app is out of date (v${v.hostInfo.version})`, `Open Remote Control on the PC and press the update button on the Overview page, or download the newest RemoteControlSetup.exe from GitHub (v${APP_VERSION}). Then reconnect.`);
+    else add('ok', `PC app is up to date (v${v.hostInfo.version})`, 'Good.');
+    if (v.hostInfo.virtual_mic) add('ok', 'Virtual mic is installed on the PC', 'In Discord or your game, choose "CABLE Output" as the microphone, then turn on Mic here.');
+    else add('warn', 'No virtual mic on the PC', 'Without it your phone mic cannot show up in Discord. In the PC app, Overview > "Install virtual microphone".');
+  } else if (v && v.hostOld) {
+    add('bad', 'PC app is out of date', 'It did not answer the new status request. Open Remote Control on the PC and update it (Overview page), or download the newest RemoteControlSetup.exe from GitHub. Then reconnect.');
+  } else {
+    add('info', 'Connect to see more', 'Connect to your PC, then run this check again - it also looks at the PC app version and the virtual mic.');
+  }
+  if (!window.isSecureContext) add('bad', 'Page is not secure', 'Microphone access only works on an https:// address.');
+  try {
+    const p = await navigator.permissions.query({ name: 'microphone' });
+    if (p.state === 'denied') add('bad', 'Microphone is blocked for this site', 'Allow the microphone for this site in your browser settings.');
+    else add('ok', p.state === 'granted' ? 'Microphone is allowed' : 'Microphone will ask for permission', 'Good.');
+  } catch { /* not every browser can answer this */ }
+}
+$('#btn-check').onclick = () => runSetupCheck();
+$('#check-close').onclick = () => $('#dlg-check').close();
+
+$('#btn-fix').onclick = () => $('#dlg-fix').showModal();
+$('#fix-close').onclick = () => $('#dlg-fix').close();
+$('#fix-update').onclick = async () => {
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(r => r.unregister()));
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => caches.delete(k)));
+  } catch {}
+  location.reload();
+};
+$('#fix-reconnect').onclick = () => {
+  $('#dlg-fix').close();
+  const devs = store.devices;
+  if (devs.length === 1) connect(devs[0]);
+  else toast('Tap Connect on the PC you want', 2200);
+};
+$('#btn-share').onclick = async () => {
+  const base = location.origin + location.pathname;
+  const devs = store.devices;
+  let url = base;
+  // The PC ID is the secret that lets a device connect, so a link carrying it
+  // is only made on purpose.
+  if (devs.length === 1 && confirm(`Include "${devs[0].name}" so the other device connects automatically?\n\nAnyone with that link can control your PC.`))
+    url += `#add=${encodeURIComponent(devs[0].deviceId)}${devs[0].relay ? ',' + encodeURIComponent(devs[0].relay) : ''}`;
+  try {
+    if (navigator.share) await navigator.share({ title: 'Remote Control', text: 'Remote Control app', url });
+    else { await navigator.clipboard.writeText(url); toast('Link copied', 1800); }
+  } catch { /* cancelled */ }
+};
 
 /* ─────────────────────────  deep link  #add=id[,relay]  ───────────── */
 function handleDeepLink() {

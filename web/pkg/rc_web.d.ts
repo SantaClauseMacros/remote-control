@@ -125,7 +125,23 @@ export function enc_gamepad_disconnect(): Uint8Array;
  */
 export function enc_gamepad_state(buttons: number, left_trigger: number, right_trigger: number, thumb_lx: number, thumb_ly: number, thumb_rx: number, thumb_ry: number): Uint8Array;
 
+/**
+ * Ask the PC to send one of its files to this device.
+ */
+export function enc_get_file(path: string): Uint8Array;
+
 export function enc_key(code: number, pressed: boolean): Uint8Array;
+
+/**
+ * List a folder on the PC (empty string = the starting list).
+ */
+export function enc_list_dir(path: string): Uint8Array;
+
+/**
+ * Paste files this device already uploaded (by transfer id) into whatever
+ * text box has focus on the PC.
+ */
+export function enc_paste_files(ids: Uint32Array): Uint8Array;
 
 export function enc_ping(nonce: number): Uint8Array;
 
@@ -148,6 +164,12 @@ export function enc_pointer_delta(dx: number, dy: number): Uint8Array;
 export function enc_pointer_move(x: number, y: number): Uint8Array;
 
 export function enc_quality(mode: string): Uint8Array;
+
+/**
+ * Ask the PC app about itself (version, virtual mic) - a reply of
+ * `kind: "info"` follows; an old PC app just never answers.
+ */
+export function enc_request_info(): Uint8Array;
 
 export function enc_scroll(dx: number, dy: number, x: number, y: number): Uint8Array;
 
@@ -201,13 +223,17 @@ export interface InitOutput {
     readonly enc_file_offer: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly enc_gamepad_disconnect: (a: number) => void;
     readonly enc_gamepad_state: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly enc_get_file: (a: number, b: number, c: number) => void;
     readonly enc_key: (a: number, b: number, c: number) => void;
+    readonly enc_list_dir: (a: number, b: number, c: number) => void;
+    readonly enc_paste_files: (a: number, b: number, c: number) => void;
     readonly enc_ping: (a: number, b: number) => void;
     readonly enc_pointer_button: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly enc_pointer_button_in_place: (a: number, b: number, c: number) => void;
     readonly enc_pointer_delta: (a: number, b: number, c: number) => void;
     readonly enc_pointer_move: (a: number, b: number, c: number) => void;
     readonly enc_quality: (a: number, b: number, c: number) => void;
+    readonly enc_request_info: (a: number) => void;
     readonly enc_scroll: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly enc_text: (a: number, b: number, c: number) => void;
     readonly encode_client_hello: (a: number, b: number, c: number, d: number, e: number) => void;

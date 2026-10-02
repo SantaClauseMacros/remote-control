@@ -18,6 +18,7 @@ mod diagnostics;
 mod direct;
 mod display;
 mod engine;
+mod focus;
 mod gamepad;
 mod identity;
 mod paired;
@@ -72,6 +73,19 @@ fn main() -> Result<()> {
          than release and will drop most frames; build with --release for real use"
     );
 
+    // "Always run as Administrator": a normal launch starts the elevated copy
+    // (a scheduled task - no UAC prompt) and steps aside. The task passes
+    // --admin-task so the elevated copy never does this itself.
+    let is_admin_task = std::env::args().any(|a| a == platform::admin_task::ARG);
+    if !is_admin_task && !platform::elevate::is_elevated() {
+        if let Ok(s) = Settings::load(&paths.config_file()) {
+            if s.run_as_admin && platform::admin_task::hand_off() {
+                tracing::info!("handed off to the elevated copy");
+                return Ok(());
+            }
+        }
+    }
+
     // Single instance: a second launch just asks the first to show settings.
     let instance = match InstanceGuard::acquire(HOST_SINGLE_INSTANCE_MUTEX)
         .context("acquiring single-instance mutex")?
@@ -108,6 +122,20 @@ fn main() -> Result<()> {
             tracing::warn!(error = %e, "could not write initial config.toml");
         } else {
             tracing::info!(path = %paths.config_file().display(), "wrote initial config");
+        }
+    }
+
+    // Keep the Administrator task in step with the setting. Only an elevated
+    // copy is allowed to touch it; turning the setting on from a normal copy
+    // restarts elevated (the dashboard does that), which lands here.
+    if platform::elevate::is_elevated() {
+        if settings.run_as_admin {
+            match std::env::current_exe().map_err(anyhow::Error::from).and_then(|exe| platform::admin_task::ensure(&exe)) {
+                Ok(()) => tracing::info!("administrator launch task is in place"),
+                Err(e) => tracing::warn!(error = %e, "could not set up the administrator launch task"),
+            }
+        } else {
+            platform::admin_task::remove();
         }
     }
 

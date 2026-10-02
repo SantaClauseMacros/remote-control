@@ -13,7 +13,7 @@ use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard,
     SetClipboardData,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 
 /// RAII guard: `OpenClipboard` on construction, `CloseClipboard` on drop.
@@ -85,6 +85,45 @@ pub fn set_text(text: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Replace the clipboard contents with a list of files (`CF_HDROP`), the same
+/// thing Explorer's Copy puts there — Ctrl+V in Discord, a browser, Word, etc.
+/// then pastes/attaches them.
+pub fn set_files(paths: &[std::path::PathBuf]) -> Result<()> {
+    if paths.is_empty() {
+        return Err(anyhow!("no files to put on the clipboard"));
+    }
+    // DROPFILES header (20 bytes): pFiles offset, pt (2 x i32), fNC, fWide;
+    // then each path as a null-terminated UTF-16 string, then an extra null.
+    let mut wide: Vec<u16> = Vec::new();
+    for p in paths {
+        wide.extend(p.to_string_lossy().encode_utf16());
+        wide.push(0);
+    }
+    wide.push(0);
+    let header_len = 20usize;
+    let bytes = header_len + wide.len() * 2;
+
+    let _guard = ClipboardGuard::open()?;
+    unsafe {
+        EmptyClipboard().map_err(|e| anyhow!("EmptyClipboard: {e}"))?;
+        let hmem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes).map_err(|e| anyhow!("GlobalAlloc: {e}"))?;
+        let dst = GlobalLock(hmem) as *mut u8;
+        if dst.is_null() {
+            return Err(anyhow!("GlobalLock failed"));
+        }
+        // pFiles = header size; fWide = 1; everything else zero.
+        (dst as *mut u32).write_unaligned(header_len as u32);
+        (dst.add(16) as *mut u32).write_unaligned(1);
+        std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, dst.add(header_len), wide.len() * 2);
+        let _ = GlobalUnlock(hmem);
+        SetClipboardData(CF_HDROP_FORMAT, HANDLE(hmem.0)).map_err(|e| anyhow!("SetClipboardData: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Clipboard format number for a list of files (`CF_HDROP`).
+const CF_HDROP_FORMAT: u32 = 15;
 
 /// Monotonic-ish counter that changes whenever the clipboard is modified.
 pub fn sequence_number() -> u32 {

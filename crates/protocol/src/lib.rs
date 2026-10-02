@@ -68,6 +68,20 @@ pub enum ClientMessage {
     FileChunk { id: u32, offset: u64, data: Vec<u8> },
     /// All chunks for `id` have been sent.
     FileDone { id: u32 },
+    /// "Tell me about this PC's app" — answered with [`HostMessage::Info`].
+    /// A host too old to know this message ignores it, which is how the
+    /// client tells the PC's app needs updating. Everything from here on was
+    /// appended later, so older peers' variant numbering is unchanged.
+    RequestInfo,
+    /// List a folder on the PC (empty path = the drives and common folders).
+    /// Answered with [`HostMessage::DirListing`].
+    ListDir { path: String },
+    /// Send this PC file to the client (same `FileOffer`/`FileChunk`/
+    /// `FileDone` stream the host already uses for pushed files).
+    GetFile { path: String },
+    /// Files the client just uploaded (by transfer id): put them on the PC's
+    /// clipboard and press Ctrl+V, so they land in whatever box has focus.
+    PasteFiles { ids: Vec<u32> },
 }
 
 /// Messages sent from the host to a controlling client.
@@ -115,6 +129,36 @@ pub enum HostMessage {
     FileChunk { id: u32, offset: u64, data: Vec<u8> },
     /// All chunks for `id` have been sent.
     FileDone { id: u32 },
+    /// Reply to [`ClientMessage::RequestInfo`].
+    Info {
+        /// The PC app's version, e.g. "0.7.0".
+        version: String,
+        /// Whether a virtual audio cable (VB-CABLE) is installed, i.e. the
+        /// phone's mic can show up as a microphone in Discord or a game.
+        virtual_mic: bool,
+    },
+    /// The PC's keyboard focus moved into (`true`) or out of a text box.
+    TextFocus(bool),
+    /// How the phone-mic stream is doing on the PC; sent about once a second
+    /// while mic packets are arriving, and once more when they stop.
+    MicStatus { receiving: bool, virtual_cable: bool },
+    /// Reply to [`ClientMessage::ListDir`].
+    DirListing {
+        path: String,
+        /// The folder one level up, if there is one.
+        parent: Option<String>,
+        entries: Vec<DirEntry>,
+        /// Set (with empty `entries`) when the folder couldn't be read.
+        error: Option<String>,
+    },
+}
+
+/// One file or folder in a [`HostMessage::DirListing`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
 }
 
 /// One monitor on the host, in virtual-desktop pixel coordinates.

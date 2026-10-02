@@ -197,6 +197,7 @@ impl App {
         let mut s = Settings::load(&path)?;
         let fields = patch.as_object().context("expected a JSON object")?;
         let mut autostart = None;
+        let mut restart_elevated = false;
 
         for (key, value) in fields {
             let as_bool = || value.as_bool().with_context(|| format!("{key} must be true or false"));
@@ -211,6 +212,16 @@ impl App {
                     s.computer_name = name.to_string();
                 }
                 "enableRemoteAccess" => s.enable_remote_access = as_bool()?,
+                "runAsAdmin" => {
+                    let on = as_bool()?;
+                    // Turning it on from a normal copy: the task has to be
+                    // created by an elevated one, so restart elevated (one
+                    // UAC prompt) once the setting is saved.
+                    if on && !s.run_as_admin && !crate::platform::elevate::is_elevated() {
+                        restart_elevated = true;
+                    }
+                    s.run_as_admin = on;
+                }
                 "startWithWindows" => {
                     let on = as_bool()?;
                     s.start_with_windows = on;
@@ -276,6 +287,9 @@ impl App {
             }
         }
         let _ = self.ctx.core_tx.send(CoreCommand::ReloadSettings);
+        if restart_elevated && !self.ctx.preview {
+            crate::platform::message_window::post_command(crate::platform::tray::ID_RESTART_ELEVATED);
+        }
         Ok(settings_view(&s, self.autostart_enabled(&s)))
     }
 
@@ -390,7 +404,7 @@ impl App {
                 if !self.ctx.preview {
                     install_virtual_mic();
                 }
-                "Installing the virtual microphone — approve the Windows prompt, then restart the PC when it finishes"
+                "Installing the virtual microphone — approve the Windows prompt, then restart Discord (and the PC only if \"CABLE Output\" is not listed)"
             }
             "restartAdmin" => {
                 if !self.ctx.preview {
@@ -431,6 +445,7 @@ fn settings_view(s: &Settings, autostart: bool) -> Value {
     json!({
         "computerName": s.computer_name,
         "enableRemoteAccess": s.enable_remote_access,
+        "runAsAdmin": s.run_as_admin,
         "startWithWindows": autostart,
         "clipboardSync": s.security.clipboard_sync,
         "streamAudio": s.audio.enabled,

@@ -300,6 +300,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
       <label class="set-row"><div class="txt"><b>Clipboard sync</b><span class="dim small">Share copied text both ways while connected</span></div><input type="checkbox" class="switch" data-setting="clipboardSync"></label>
       <label class="set-row"><div class="txt"><b>Show on local network</b><span class="dim small">Lets the desktop viewer find this PC by name</span></div><input type="checkbox" class="switch" data-setting="lanDiscovery"></label>
       <label class="set-row"><div class="txt"><b>Check for updates</b><span class="dim small">Get a notification when a new version is out</span></div><input type="checkbox" class="switch" data-setting="updateChecks"></label>
+      <label class="set-row"><div class="txt"><b>Always run as Administrator</b><span class="dim small">Opens Remote Control as Administrator every time, with no permission prompt after the first. Lets your phone click Task Manager, permission pop-ups and other admin windows.</span></div><input type="checkbox" class="switch" data-setting="runAsAdmin"></label>
       <label class="set-row"><div class="txt"><b>Keep this PC awake</b><span class="dim small">Stops it sleeping — and stops the monitor from turning off — while Remote Control is running. Also fixes sessions freezing after the screen blanks itself, since capture generally can't see a display that's powered off.</span></div><input type="checkbox" class="switch" data-setting="preventSleep"></label>
       <label class="set-row"><div class="txt"><b>60&nbsp;FPS boost on direct connections</b><span class="dim small">Doubles the frame rate once a session switches to ⚡ direct (same-network) — that link usually has room for it</span></div><input type="checkbox" class="switch" data-setting="uncapFpsOnDirect"></label>
     </div>
@@ -585,7 +586,7 @@ function renderChecks() {
   else add('warn', "Doesn't start with Windows", "If the PC restarts, you won't be able to connect until someone opens Remote Control.", ['Turn on', () => saveSetting('startWithWindows', true)]);
   if (s.session && !s.session.hardwareEncoder) add('warn', 'Using slower CPU video encoding', 'Your graphics card encoder is busy or unavailable. Closing Parsec, OBS or ShadowPlay usually frees it.');
   if (s.virtualMic) add('ok', 'Phone mic works in Discord & games', 'A virtual microphone is installed. In Discord / your game, set the microphone to "CABLE Output", then tap ⋯ → Mic on your phone.');
-  else add('info', 'Phone mic needs a virtual microphone', 'Windows can not turn a phone into a mic by itself. This installs VB-CABLE (free) — then pick "CABLE Output" as the mic in Discord. Restart the PC afterwards.', ['Install virtual microphone', () => action('installVirtualMic')]);
+  else add('info', 'Phone mic needs a virtual microphone', 'Windows can not turn a phone into a mic by itself. This installs VB-CABLE (free) — then pick "CABLE Output" as the mic in Discord. Restart Discord afterwards (the PC only if "CABLE Output" still is not listed).', ['Install virtual microphone', () => action('installVirtualMic')]);
   if (s.elevated) add('ok', 'Running as Administrator', 'You can control Task Manager and admin prompts.');
   else add('info', 'Admin windows need Administrator', "Task Manager and admin prompts ignore remote clicks unless Remote Control runs as Administrator.", ['Restart as Administrator', () => action('restartAdmin')]);
   const ul = $('#checks');
@@ -626,6 +627,11 @@ function syncQuickSwitches() {
   fillSettings();
 }
 async function saveSetting(key, value) {
+  if (key === 'runAsAdmin' && value && !status.elevated &&
+      !await confirmBox('Always run as Administrator?', 'Windows will ask for permission once and Remote Control will restart (any connected device drops for a few seconds). After that it opens as Administrator by itself.', 'Turn on')) {
+    loadSettings();
+    return;
+  }
   try {
     settings = await api('/api/settings', { [key]: value });
     fillSettings();
@@ -694,7 +700,7 @@ async function loadActivity() {
 /* ── actions ── */
 async function action(name) {
   if (name === 'restartAdmin' && !await confirmBox('Restart as Administrator?', 'Windows will ask for permission. Any connected device will be disconnected for a few seconds.', 'Restart')) return;
-  if (name === 'installVirtualMic' && !await confirmBox('Install the virtual microphone?', 'This downloads VB-CABLE (a free virtual audio cable from vb-audio.com) and runs its installer. Windows will ask for permission, and you should restart the PC afterwards.', 'Install')) return;
+  if (name === 'installVirtualMic' && !await confirmBox('Install the virtual microphone?', 'This downloads VB-CABLE (a free virtual audio cable from vb-audio.com) and runs its installer. Windows will ask for permission, and you should restart Discord afterwards.', 'Install')) return;
   if (name === 'exit' && !await confirmBox('Exit Remote Control?', "Nobody will be able to connect to this PC until it's started again.", 'Exit')) return;
   try {
     const r = await api('/api/action', { action: name });

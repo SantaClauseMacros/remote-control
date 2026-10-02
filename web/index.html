@@ -29,6 +29,12 @@
     from the tray menu on the PC.</p>
   </div>
 
+  <div class="quick">
+    <button id="btn-share" class="btn ghost">📤 Share link</button>
+    <button id="btn-fix" class="btn ghost">🛠 Fix common problems</button>
+    <button id="btn-check" class="btn ghost">✅ Check my setup</button>
+  </div>
+
   <button id="btn-add" class="fab" aria-label="Add computer">+</button>
 </main>
 
@@ -46,6 +52,9 @@
     <div id="cursor" class="cursor" hidden></div>
     <div id="toast" class="toast" hidden></div>
     <div id="hud" class="hud"></div>
+    <div id="banner" class="banner" hidden></div>
+    <div id="mic-status" class="mic-status" hidden></div>
+    <button id="kbd-pill" class="kbd-pill" hidden>⌨ Tap to type</button>
     <div id="joystick" class="joystick" hidden>
       <div class="knob"></div>
     </div>
@@ -63,7 +72,9 @@
     <button data-act="quality" class="ctl">◔<span>Quality</span></button>
     <button data-act="sound" class="ctl" id="sound-btn">🔊<span>Sound</span></button>
     <button data-act="mic" class="ctl" id="mic-btn">🎙<span>Mic</span></button>
-    <button data-act="files" class="ctl">📁<span>Send file</span></button>
+    <button data-act="files" class="ctl">📁<span>Send files</span></button>
+    <button data-act="browse" class="ctl">🗂<span>PC files</span></button>
+    <button data-act="check" class="ctl">✅<span>Check</span></button>
     <button data-act="disconnect" class="ctl danger">⏻<span>Leave</span></button>
   </div>
 
@@ -105,6 +116,21 @@
   <input id="kbd" class="kbd-trap" autocomplete="off" autocorrect="off"
          autocapitalize="off" spellcheck="false" aria-hidden="true" />
 </section>
+
+<!-- ─── PC file browser (download PC files to this device) ───────── -->
+<div id="browser" class="browser" hidden>
+  <header class="bar">
+    <button id="br-up" class="icon-btn" aria-label="Back">←</button>
+    <h1>PC files</h1>
+    <button id="br-close" class="icon-btn" aria-label="Close">✕</button>
+  </header>
+  <div id="br-path" class="br-path dim"></div>
+  <div id="br-list" class="br-list"></div>
+  <footer class="br-foot">
+    <button id="br-all" class="btn ghost">Select all</button>
+    <button id="br-get" class="btn primary" disabled>Download</button>
+  </footer>
+</div>
 
 <!-- ─── Add / edit dialog ───────────────────────────────────────── -->
 <dialog id="dlg-device">
@@ -151,14 +177,44 @@
     <label class="row">
       <input name="mic" type="checkbox" /> Share my microphone with the PC
     </label>
-    <p class="help-note dim">Needs the PC's "Microphone" feature turned on too, in its Settings.</p>
+    <p class="help-note dim">Works in Discord once the PC has the virtual mic (PC app > Overview > Install virtual microphone).</p>
+    <label class="row">
+      <input name="autoKeyboard" type="checkbox" /> Open the keyboard when the PC is in a text box
+    </label>
     <menu>
       <button value="ok" class="btn primary">Done</button>
     </menu>
   </form>
 </dialog>
 
-<input id="file-picker" type="file" hidden />
+<input id="file-picker" type="file" multiple hidden />
+
+<!-- ─── Check my setup ─────────────────────────────────────────── -->
+<dialog id="dlg-check">
+  <form method="dialog" onsubmit="return false">
+    <h2>Check my setup</h2>
+    <ul id="check-list" class="checks"></ul>
+    <menu><button id="check-close" class="btn primary" type="button">Close</button></menu>
+  </form>
+</dialog>
+
+<!-- ─── Fix common problems ───────────────────────────────────── -->
+<dialog id="dlg-fix">
+  <form method="dialog" onsubmit="return false">
+    <h2>Fix common problems</h2>
+    <div class="fixes">
+      <button id="fix-update" class="btn ghost" type="button">Get the newest version of this app</button>
+      <p class="dim small">Fixes "it still acts like the old version". The page reloads.</p>
+      <button id="fix-reconnect" class="btn ghost" type="button">Reconnect to my PC</button>
+      <p class="dim small">Use after losing Wi-Fi or if it says connected but nothing moves.</p>
+      <p><b>Phone mic not working in Discord?</b></p>
+      <p class="dim small">1) Update the PC app. 2) In the PC app press "Install virtual microphone". 3) Restart Discord and pick "CABLE Output" as its mic. 4) Reconnect and tap Mic. "Check my setup" tells you which step is missing.</p>
+      <p><b>Keyboard did not pop up?</b></p>
+      <p class="dim small">On iPhone tap the "Tap to type" button that appears when the PC is in a text box.</p>
+    </div>
+    <menu><button id="fix-close" class="btn primary" type="button">Close</button></menu>
+  </form>
+</dialog>
 
 <!-- ─── Game controls help ──────────────────────────────────────── -->
 <dialog id="dlg-help">

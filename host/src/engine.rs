@@ -170,13 +170,16 @@ pub async fn run(
             }
 
             // Relay splice — a client reached us through the rendezvous server.
+            // Also taken while a session is "running": a phone that lost wifi
+            // never says goodbye, so its dead session would otherwise sit
+            // here and the same phone could never get back in. The new client
+            // has to pass the handshake (it knows the PC's secret) before the
+            // old session is replaced.
             relayed = async { relay_rx.as_mut().unwrap().recv().await },
-                if relay_rx.is_some() && session_task.is_none() =>
+                if relay_rx.is_some() =>
             {
                 if let Some((stream, ack)) = relayed {
-                    // Tell the parker we've taken this stream so it can re-park;
-                    // we only reach this branch when no session is running, so
-                    // the parker never buffers a stream a client has abandoned.
+                    // Tell the parker we've taken this stream so it can re-park.
                     let _ = ack.send(());
                     let hs = tokio::time::timeout(
                         Duration::from_secs(6),
@@ -184,6 +187,16 @@ pub async fn run(
                     ).await;
                     match hs {
                         Ok(Ok(sess)) => {
+                            if let Some(task) = session_task.take() {
+                                tracing::info!("a new connection arrived; replacing the previous session");
+                                if let Some(stop) = session_stop.take() {
+                                    let _ = stop.send(true);
+                                }
+                                session_cmd_tx = None;
+                                let _ = tokio::time::timeout(Duration::from_secs(8), task).await;
+                                status.sessions = 0;
+                                status.session = None;
+                            }
                             begin_session(
                                 sess, "via relay".to_string(), host_static, &device_id, &settings, &mut paired,
                                 &mut status, &status_tx, &mut session_task, &mut session_stop, &mut session_cmd_tx,

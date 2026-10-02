@@ -492,6 +492,32 @@ pub fn enc_file_done(id: u32) -> Vec<u8> {
     enc(&ClientMessage::FileDone { id })
 }
 
+/// Ask the PC app about itself (version, virtual mic) - a reply of
+/// `kind: "info"` follows; an old PC app just never answers.
+#[wasm_bindgen]
+pub fn enc_request_info() -> Vec<u8> {
+    enc(&ClientMessage::RequestInfo)
+}
+
+/// List a folder on the PC (empty string = the starting list).
+#[wasm_bindgen]
+pub fn enc_list_dir(path: &str) -> Vec<u8> {
+    enc(&ClientMessage::ListDir { path: path.to_string() })
+}
+
+/// Ask the PC to send one of its files to this device.
+#[wasm_bindgen]
+pub fn enc_get_file(path: &str) -> Vec<u8> {
+    enc(&ClientMessage::GetFile { path: path.to_string() })
+}
+
+/// Paste files this device already uploaded (by transfer id) into whatever
+/// text box has focus on the PC.
+#[wasm_bindgen]
+pub fn enc_paste_files(ids: Vec<u32>) -> Vec<u8> {
+    enc(&ClientMessage::PasteFiles { ids })
+}
+
 fn map_button(b: u8) -> PointerButton {
     match b {
         1 => PointerButton::Right,
@@ -526,6 +552,18 @@ pub fn decode_host_message(payload: &[u8]) -> Result<JsValue, JsValue> {
             return Ok(file_chunk_js(id, offset as f64, &data));
         }
         HostMessage::FileDone { id } => HostMsgJs::FileDone { id },
+        HostMessage::Info { version, virtual_mic } => HostMsgJs::Info { version, virtual_mic },
+        HostMessage::TextFocus(focused) => HostMsgJs::TextFocus { focused },
+        HostMessage::MicStatus { receiving, virtual_cable } => HostMsgJs::MicStatus { receiving, virtual_cable },
+        HostMessage::DirListing { path, parent, entries, error } => HostMsgJs::DirListing {
+            path,
+            parent,
+            entries: entries
+                .into_iter()
+                .map(|e| DirEntryJs { name: e.name, is_dir: e.is_dir, size: e.size as f64 })
+                .collect(),
+            error,
+        },
         HostMessage::Displays(d) => HostMsgJs::Displays {
             displays: d
                 .into_iter()
@@ -563,6 +601,21 @@ enum HostMsgJs {
     FileOffer { id: u32, name: String, size: f64 },
     /// `kind: "filedone"`
     FileDone { id: u32 },
+    /// `kind: "info"` - reply to `enc_request_info`.
+    Info { version: String, virtual_mic: bool },
+    /// `kind: "textfocus"` - keyboard focus on the PC entered/left a text box.
+    TextFocus { focused: bool },
+    /// `kind: "micstatus"` - whether the PC is receiving this device's mic.
+    MicStatus { receiving: bool, virtual_cable: bool },
+    /// `kind: "dirlisting"` - reply to `enc_list_dir`.
+    DirListing { path: String, parent: Option<String>, entries: Vec<DirEntryJs>, error: Option<String> },
+}
+
+#[derive(Serialize)]
+struct DirEntryJs {
+    name: String,
+    is_dir: bool,
+    size: f64,
 }
 
 /// A `HostMessage::FileChunk`'s bytes go out as a real `Uint8Array` rather

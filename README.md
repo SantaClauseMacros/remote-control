@@ -46,7 +46,7 @@ Click the tray icon to open it.
 - **Home** — your PC ID and QR code, who's connected right now (with live FPS and ping), quick switches, and a health check that tells you if anything needs fixing
 - **Devices** — phones and computers that have connected
 - **Activity** — recent connections, drops and updates
-- **Settings** — PC name, start with Windows, video quality and frame rate, clipboard sync, microphone, keeping the PC awake, multi-monitor handling, updates, and tools like *Restart as Administrator*
+- **Settings** — PC name, start with Windows, video quality and frame rate, clipboard sync, microphone, keeping the PC awake, multi-monitor handling, updates, *Always run as Administrator* (one permission prompt, then it opens elevated every time — handy for Task Manager and admin pop-ups), and tools like *Restart as Administrator*
 - **Help** — how to connect, touch controls, Minecraft mode and common fixes
 
 ## Using it
@@ -67,7 +67,15 @@ Click the tray icon to open it.
 
 **Microphone:** tap **⋯ → Mic** to send your phone's mic to the PC. To use it as an actual microphone in Discord or a game, the PC needs a virtual microphone — the PC app's **Overview** checklist has an **Install virtual microphone** button (see [Using it as an actual PC microphone](#using-your-phones-mic-as-a-pc-microphone) below).
 
-**Send a file:** tap **⋯ → Send file** to upload something from your phone straight to the PC's `Downloads\RemoteControl` folder. The PC app can send files back the same way (Home, while connected → **Send a file to this device**).
+**Send files:** tap **⋯ → Send files** and pick one or many — they go to the PC's `Downloads\RemoteControl` folder. If the PC's cursor is in a text box (Discord, a browser…), pictures are pasted straight into it instead. The PC app can send files back the same way (Home, while connected).
+
+**Get files off the PC:** tap **⋯ → PC files**, browse the PC's folders (Downloads, Desktop, Documents, drives…), tick one or more files and press **Download** — they save to your phone or laptop.
+
+**Keyboard:** when the PC's cursor lands in a text box, your phone's keyboard opens by itself (iPhone shows a **Tap to type** button instead — Apple only allows the keyboard from a tap). Turn it off in the app's Settings.
+
+**Connection:** if you lose Wi-Fi, the app notices within a few seconds and reconnects by itself when it's back. The PC drops a dead session after a minute and always lets the same phone back in.
+
+**Something wrong?** On the home screen, **Check my setup** says in plain words what's missing (PC offline, PC app out of date, no virtual mic, mic blocked) and **Fix common problems** has the usual fixes. **Share link** sends the app to another device. The mic button shows a live level meter and tells you if the PC isn't receiving it.
 
 **Controller:** pair a real controller (Bluetooth or USB-OTG) to your phone and it shows up on the PC as a virtual Xbox controller — works in Steam games, Fortnite, Rocket League, and anything else that takes a controller. Needs the free [ViGEmBus driver](https://github.com/ViGEm/ViGEmBus/releases) installed on the PC once; if it's missing, the app tells you the first time you use a controller.
 
@@ -99,7 +107,7 @@ Tap **?** for the full list. If the hotbar targets don't line up, set **Hotbar s
 
 Windows has no built-in way to turn incoming audio into a microphone other apps can select — it needs one free, one-time driver:
 
-1. In the PC app, open **Overview** and press **Install virtual microphone** under *Phone mic needs a virtual microphone* (it downloads [VB-CABLE](https://vb-audio.com/Cable/), free, and runs its installer — approve the Windows prompt). Or install VB-CABLE yourself. Then restart the PC.
+1. In the PC app, open **Overview** and press **Install virtual microphone** under *Phone mic needs a virtual microphone* (it downloads [VB-CABLE](https://vb-audio.com/Cable/), free, and runs its installer — approve the Windows prompt). Or install VB-CABLE yourself. Then restart Discord (a PC restart is only needed if "CABLE Output" still is not listed).
 2. In Discord (or your game), set the microphone to **CABLE Output**.
 3. On your phone, tap **⋯ → Mic**. That's it — no setting to turn on; with VB-CABLE installed your voice goes only to "CABLE Output", never out of the speakers.
 

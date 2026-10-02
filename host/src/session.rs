@@ -481,7 +481,8 @@ pub async fn run(
     // Output" (what Discord / a game picks as its microphone) and never out
     // of the speakers, so there's nothing to opt in to. Without one, the
     // setting stays the opt-in for the play-on-speakers fallback.
-    let mic_on = params.mic || rc_audio::has_virtual_cable();
+    let virtual_cable = rc_audio::has_virtual_cable();
+    let mic_on = params.mic || virtual_cable;
     if mic_on {
         let ms = mic_stop.clone();
         std::thread::Builder::new()
@@ -490,6 +491,29 @@ pub async fn run(
             .ok();
     }
 
+    // ── is a text box focused on the PC? (phone pops its keyboard up) ─────
+    let focus_stop = Arc::new(AtomicBool::new(false));
+    let (focus_tx, mut focus_rx) = mpsc::unbounded_channel::<bool>();
+    {
+        let fs = focus_stop.clone();
+        std::thread::Builder::new()
+            .name("rc-focus".into())
+            .spawn(move || crate::focus::watch(&fs, &focus_tx))
+            .ok();
+    }
+
+    // Uploaded files by transfer id, for `PasteFiles`; phone-mic and
+    // liveness bookkeeping.
+    let mut uploaded: HashMap<u32, PathBuf> = HashMap::new();
+    let mut mic_last: Option<Instant> = None;
+    let mut mic_reported = false;
+    let mut mic_tick = tokio::time::interval(Duration::from_secs(1));
+    // Anything at all heard from the client (it pings every few seconds).
+    // A phone that lost wifi never says goodbye, so without this the session
+    // - and everything it holds - sat there until the OS gave up on the
+    // socket, many minutes later.
+    let mut last_heard = Instant::now();
+
     let reason;
     loop {
         let release_due = injector.next_release_due();
@@ -497,7 +521,8 @@ pub async fn run(
         tokio::select! {
             r = cur.control().recv() => match r {
                 Ok(bytes) => {
-                    match handle_client_msg(&bytes, &mut injector, clipboard.as_ref(), &link, &mut gamepad, &mut incoming_files).await {
+                    last_heard = Instant::now();
+                    match handle_client_msg(&bytes, &mut injector, clipboard.as_ref(), &link, &mut gamepad, &mut incoming_files, &mut uploaded).await {
                         ClientAction::Input => {
                             stats.input_events.fetch_add(1, Ordering::Relaxed);
                         }
@@ -514,6 +539,9 @@ pub async fn run(
                         }
                         ClientAction::DirectOffer(sdp) => {
                             tokio::spawn(offer_direct(sdp, link.clone(), params.clone(), direct_tx.clone()));
+                        }
+                        ClientAction::GetFile(path) => {
+                            tokio::spawn(send_file_to_client(link.clone(), PathBuf::from(path)));
                         }
                         ClientAction::None => {}
                     }
@@ -557,7 +585,23 @@ pub async fn run(
                 Ok(_) => tracing::warn!("a direct path authenticated a different device; ignored"),
                 Err(e) => tracing::info!(error = %e, "direct connection didn't come up; staying on the relay"),
             },
+            Some(text_box) = focus_rx.recv() => {
+                link.send(&HostMessage::TextFocus(text_box)).await;
+            }
+            _ = mic_tick.tick() => {
+                let receiving = mic_last.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+                if receiving || mic_reported {
+                    mic_reported = receiving;
+                    link.send(&HostMessage::MicStatus { receiving, virtual_cable }).await;
+                }
+                if last_heard.elapsed() > Duration::from_secs(60) {
+                    reason = "client stopped responding (lost connection?)".into();
+                    break;
+                }
+            }
             mic = cur.recv_mic(), if mic_on => {
+                last_heard = Instant::now();
+                mic_last = Some(Instant::now());
                 if let Ok(packet) = mic {
                     if let Some(d) = rc_audio::adpcm::decode(&packet) {
                         let _ = mic_render_tx.try_send((d.samples, d.sample_rate, d.channels));
@@ -687,6 +731,7 @@ pub async fn run(
     clip_stop.store(true, Ordering::SeqCst);
     audio_stop.store(true, Ordering::SeqCst);
     mic_stop.store(true, Ordering::SeqCst);
+    focus_stop.store(true, Ordering::SeqCst);
     let _ = capture_thread.join();
     drop(encoder_slot); // last ref → flushes and joins the encoder thread
     injector.release_all();
@@ -739,6 +784,61 @@ async fn send_file_to_client(link: Arc<Link>, path: PathBuf) {
     tracing::info!(name, size, "sent file to the connected device");
 }
 
+/// The listing for `path`; an empty path means "start": the usual user
+/// folders plus the drives.
+async fn list_dir(path: &str) -> HostMessage {
+    use rc_protocol::DirEntry;
+    let fail = |path: &str, msg: String| HostMessage::DirListing {
+        path: path.to_string(),
+        parent: None,
+        entries: Vec::new(),
+        error: Some(msg),
+    };
+    if path.is_empty() {
+        let mut entries = Vec::new();
+        if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+            for name in ["Downloads", "Desktop", "Documents", "Pictures", "Music", "Videos"] {
+                if home.join(name).is_dir() {
+                    entries.push(DirEntry { name: home.join(name).to_string_lossy().into_owned(), is_dir: true, size: 0 });
+                }
+            }
+        }
+        for letter in b'A'..=b'Z' {
+            let root = format!("{}:\\", letter as char);
+            if Path::new(&root).exists() {
+                entries.push(DirEntry { name: root, is_dir: true, size: 0 });
+            }
+        }
+        return HostMessage::DirListing { path: String::new(), parent: None, entries, error: None };
+    }
+    let dir = PathBuf::from(path);
+    let mut rd = match tokio::fs::read_dir(&dir).await {
+        Ok(r) => r,
+        Err(e) => return fail(path, format!("Can't open this folder: {e}")),
+    };
+    let mut entries = Vec::new();
+    while let Ok(Some(e)) = rd.next_entry().await {
+        let Ok(meta) = e.metadata().await else { continue };
+        let name = e.file_name().to_string_lossy().into_owned();
+        // Skip Windows' hidden/system clutter.
+        let hidden = {
+            use std::os::windows::fs::MetadataExt;
+            meta.file_attributes() & (0x2 | 0x4) != 0 // HIDDEN | SYSTEM
+        };
+        if hidden {
+            continue;
+        }
+        entries.push(DirEntry { name, is_dir: meta.is_dir(), size: if meta.is_dir() { 0 } else { meta.len() } });
+        if entries.len() >= 5000 {
+            break;
+        }
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    // An empty parent means "back to the start list" (a drive root's parent).
+    let parent = Some(dir.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
+    HostMessage::DirListing { path: path.to_string(), parent, entries, error: None }
+}
+
 /// Answer a device's offer of a direct path. The answer goes back over the
 /// current link; the direct session — once its own handshake completes, or
 /// fails — arrives on `direct_tx`.
@@ -779,6 +879,8 @@ enum ClientAction {
     SetQuality(QualityMode),
     /// The client offers a direct path (WebRTC SDP).
     DirectOffer(String),
+    /// The client wants this PC file sent to it.
+    GetFile(String),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -789,6 +891,7 @@ async fn handle_client_msg(
     link: &Link,
     gamepad: &mut GamepadHub,
     incoming: &mut HashMap<u32, IncomingFile>,
+    uploaded: &mut HashMap<u32, PathBuf>,
 ) -> ClientAction {
     match rc_protocol::decode::<ClientMessage>(bytes) {
         Ok(ClientMessage::Input(ev)) => {
@@ -877,7 +980,34 @@ async fn handle_client_msg(
                     format!("\"{}\" arrived incomplete and was kept anyway", f.name)
                 };
                 link.send(&HostMessage::Notice(text)).await;
-                let _ = f.path; // kept on disk either way; nothing further to do with the handle
+                uploaded.insert(id, f.path); // kept on disk either way; `PasteFiles` may want it
+            }
+        }
+        Ok(ClientMessage::RequestInfo) => {
+            link.send(&HostMessage::Info {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                virtual_mic: rc_audio::has_virtual_cable(),
+            })
+            .await;
+        }
+        Ok(ClientMessage::ListDir { path }) => {
+            link.send(&list_dir(&path).await).await;
+        }
+        Ok(ClientMessage::GetFile { path }) => return ClientAction::GetFile(path),
+        Ok(ClientMessage::PasteFiles { ids }) => {
+            let paths: Vec<PathBuf> = ids.iter().filter_map(|id| uploaded.get(id).cloned()).collect();
+            if paths.is_empty() {
+                link.send(&HostMessage::Notice("Nothing to paste - those files didn't arrive".into())).await;
+            } else if let Err(e) = rc_clipboard::set_files(&paths) {
+                tracing::warn!(error = %e, "putting uploaded files on the clipboard failed");
+                link.send(&HostMessage::Notice("Couldn't paste the files on the PC".into())).await;
+            } else {
+                // Give the clipboard a beat to settle, then Ctrl+V.
+                tokio::time::sleep(Duration::from_millis(120)).await;
+                for (code, pressed) in [(0x11, true), (0x56, true), (0x56, false), (0x11, false)] {
+                    let _ = injector.inject(&InputEvent::Key { code, pressed });
+                }
+                tracing::info!(count = paths.len(), "pasted uploaded files into the focused box");
             }
         }
         Err(e) => tracing::warn!(error = %e, "undecodable control message"),
@@ -996,5 +1126,36 @@ fn capture_loop(
             }
         }
         ts_us += (1_000_000 / fps.max(1)) as u64;
+    }
+}
+
+#[cfg(test)]
+mod browse_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lists_folders_first_and_the_start_list() {
+        let dir = std::env::temp_dir().join(format!("rc-browse-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("b-folder")).unwrap();
+        std::fs::write(dir.join("a-file.txt"), b"hi").unwrap();
+        match list_dir(&dir.to_string_lossy()).await {
+            HostMessage::DirListing { entries, error, parent, .. } => {
+                assert!(error.is_none());
+                assert!(parent.is_some());
+                assert_eq!(entries.len(), 2);
+                assert!(entries[0].is_dir && entries[0].name == "b-folder", "folders sort first");
+                assert_eq!(entries[1].size, 2);
+            }
+            _ => panic!("expected a listing"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        match list_dir("").await {
+            HostMessage::DirListing { entries, parent, .. } => {
+                assert!(parent.is_none());
+                assert!(entries.iter().any(|e| e.name.ends_with(":\\")), "drives are listed");
+            }
+            _ => panic!("expected the start list"),
+        }
+        assert!(matches!(list_dir(r"C:\definitely\not\here").await, HostMessage::DirListing { error: Some(_), .. }));
     }
 }
