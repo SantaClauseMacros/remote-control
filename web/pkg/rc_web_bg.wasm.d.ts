@@ -19,6 +19,7 @@ export const enc_gamepad_state: (a: number, b: number, c: number, d: number, e: 
 export const enc_get_file: (a: number, b: number, c: number) => void;
 export const enc_key: (a: number, b: number, c: number) => void;
 export const enc_list_dir: (a: number, b: number, c: number) => void;
+export const enc_mic_only: (a: number) => void;
 export const enc_paste_files: (a: number, b: number, c: number) => void;
 export const enc_ping: (a: number, b: number) => void;
 export const enc_pointer_button: (a: number, b: number, c: number, d: number, e: number) => void;

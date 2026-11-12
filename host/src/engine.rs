@@ -19,9 +19,44 @@ use crate::relay::Splice;
 use tokio::task::JoinHandle;
 
 use crate::identity;
+use crate::mic_only;
 use crate::paired::PairedStore;
 use crate::session::{self, SessionParams};
 use crate::settings::Settings;
+use rc_protocol::ClientMessage;
+
+/// How many devices can control the PC at the same time. A third connection
+/// replaces the one that has been connected longest.
+const MAX_SESSIONS: usize = 2;
+/// How long a new connection gets to say it is mic-only (its first message)
+/// before it is treated as a normal controlling device.
+const FIRST_MESSAGE_WAIT: Duration = Duration::from_millis(1500);
+
+/// One running controlling session.
+struct Slot {
+    id: u64,
+    peer_key: [u8; 32],
+    task: JoinHandle<()>,
+    stop: watch::Sender<bool>,
+    cmd_tx: mpsc::UnboundedSender<session::SessionCommand>,
+    info: SessionInfo,
+}
+
+/// The running mic-only link, if any (see [`mic_only`]).
+struct MicSlot {
+    id: u64,
+    task: JoinHandle<()>,
+    stop: watch::Sender<bool>,
+}
+
+/// Everything that is connected right now.
+struct Live {
+    slots: Vec<Slot>,
+    mic: Option<MicSlot>,
+    next_id: u64,
+    /// Each task reports its id here when it ends.
+    ended_tx: mpsc::UnboundedSender<u64>,
+}
 
 /// Fallback TCP port when `network.listen_port` is 0. From the IANA dynamic
 /// range; not registered, not privileged.
@@ -62,6 +97,8 @@ pub struct CoreStatus {
     pub state: CoreState,
     pub device_id: String,
     pub sessions: u32,
+    /// A mic-only link is connected (it is not counted in `sessions`).
+    pub mic_only: bool,
     /// Port the LAN listener is bound to (0 if not listening).
     pub listen_port: u16,
     /// `true` while relay parking is enabled.
@@ -114,9 +151,8 @@ pub async fn run(
     let mut advertiser: Option<rc_discovery::Advertiser> = None;
     let mut relay_rx: Option<mpsc::Receiver<Splice>> = None;
     let mut relay_stop: Option<watch::Sender<bool>> = None;
-    let mut session_task: Option<JoinHandle<()>> = None;
-    let mut session_stop: Option<watch::Sender<bool>> = None;
-    let mut session_cmd_tx: Option<mpsc::UnboundedSender<session::SessionCommand>> = None;
+    let (ended_tx, mut ended_rx) = mpsc::unbounded_channel::<u64>();
+    let mut live = Live { slots: Vec::new(), mic: None, next_id: 1, ended_tx };
     let mut update_rx = crate::update::spawn(paths.clone());
 
     apply_listening_state(
@@ -154,26 +190,27 @@ pub async fn run(
                 }
             }
 
-            // LAN accept — only while listening and idle.
+            // LAN accept — while listening and there's room for another device.
             accepted = async { listener.as_ref().unwrap().accept().await },
-                if listener.is_some() && session_task.is_none() =>
+                if listener.is_some() && live.slots.len() < MAX_SESSIONS =>
             {
                 match accepted {
                     Ok((sess, peer)) => {
-                        begin_session(
-                            sess, peer.to_string(), host_static, &device_id, &settings, &mut paired,
-                            &mut status, &status_tx, &mut session_task, &mut session_stop, &mut session_cmd_tx,
+                        live.admit(
+                            sess, peer.to_string(), host_static, &device_id, &settings, &mut paired, &mut status,
                         ).await;
+                        live.sync_status(&mut status, listener.is_some(), &settings);
+                        publish(&status_tx, &status);
                     }
                     Err(e) => tracing::warn!(error = %e, "LAN accept/handshake failed"),
                 }
             }
 
             // Relay splice — a client reached us through the rendezvous server.
-            // Also taken while a session is "running": a phone that lost wifi
+            // Also taken while sessions are "running": a phone that lost wifi
             // never says goodbye, so its dead session would otherwise sit
             // here and the same phone could never get back in. The new client
-            // has to pass the handshake (it knows the PC's secret) before the
+            // has to pass the handshake (it knows the PC's secret) before any
             // old session is replaced.
             relayed = async { relay_rx.as_mut().unwrap().recv().await },
                 if relay_rx.is_some() =>
@@ -187,20 +224,11 @@ pub async fn run(
                     ).await;
                     match hs {
                         Ok(Ok(sess)) => {
-                            if let Some(task) = session_task.take() {
-                                tracing::info!("a new connection arrived; replacing the previous session");
-                                if let Some(stop) = session_stop.take() {
-                                    let _ = stop.send(true);
-                                }
-                                session_cmd_tx = None;
-                                let _ = tokio::time::timeout(Duration::from_secs(8), task).await;
-                                status.sessions = 0;
-                                status.session = None;
-                            }
-                            begin_session(
-                                sess, "via relay".to_string(), host_static, &device_id, &settings, &mut paired,
-                                &mut status, &status_tx, &mut session_task, &mut session_stop, &mut session_cmd_tx,
+                            live.admit(
+                                sess, "via relay".to_string(), host_static, &device_id, &settings, &mut paired, &mut status,
                             ).await;
+                            live.sync_status(&mut status, listener.is_some(), &settings);
+                            publish(&status_tx, &status);
                         }
                         Ok(Err(e)) => tracing::warn!(error = %e, "relayed handshake failed"),
                         Err(_) => tracing::warn!("relayed handshake timed out"),
@@ -208,19 +236,14 @@ pub async fn run(
                 }
             }
 
-            // The active session finished.
-            _ = async { session_task.as_mut().unwrap().await.ok(); }, if session_task.is_some() => {
-                tracing::info!("session task finished");
-                session_task = None;
-                session_stop = None;
-                session_cmd_tx = None;
-                status.sessions = 0;
-                status.session = None;
-                status.state = if listener.is_some() {
-                    CoreState::Listening
-                } else {
-                    state_without_listener(&settings)
-                };
+            // A session (or the mic-only link) finished.
+            Some(id) = ended_rx.recv() => {
+                tracing::info!(id, "session task finished");
+                live.slots.retain(|s| s.id != id);
+                if live.mic.as_ref().is_some_and(|m| m.id == id) {
+                    live.mic = None;
+                }
+                live.sync_status(&mut status, listener.is_some(), &settings);
                 publish(&status_tx, &status);
             }
 
@@ -239,7 +262,7 @@ pub async fn run(
                                 crate::platform::power::set_prevent_sleep(new.power.prevent_sleep);
                             }
                             settings = new;
-                            if session_task.is_none() {
+                            if live.slots.is_empty() && live.mic.is_none() {
                                 if relisten {
                                     listener = None;
                                     advertiser = None;
@@ -263,11 +286,11 @@ pub async fn run(
                     }
                 }
                 Some(CoreCommand::DisconnectAll) => {
-                    if let Some(stop) = &session_stop {
-                        tracing::info!("disconnecting active session");
-                        let _ = stop.send(true);
-                    } else {
+                    if live.slots.is_empty() && live.mic.is_none() {
                         tracing::info!("disconnect-all: nothing connected");
+                    } else {
+                        tracing::info!("disconnecting active sessions");
+                        live.stop_all();
                     }
                 }
                 Some(CoreCommand::ForgetPaired) => {
@@ -277,8 +300,9 @@ pub async fn run(
                     publish(&status_tx, &status);
                 }
                 Some(CoreCommand::SendFileToClient(path)) => {
-                    match &session_cmd_tx {
-                        Some(tx) => { let _ = tx.send(session::SessionCommand::SendFile(path)); }
+                    // To the device that connected most recently.
+                    match live.slots.last() {
+                        Some(s) => { let _ = s.cmd_tx.send(session::SessionCommand::SendFile(path)); }
                         None => tracing::info!("send file requested, but nothing is connected"),
                     }
                 }
@@ -298,8 +322,8 @@ pub async fn run(
                     tracing::info!("core shutting down");
                     crate::platform::power::set_prevent_sleep(false);
                     if let Some(s) = &relay_stop { let _ = s.send(true); }
-                    if let Some(stop) = &session_stop { let _ = stop.send(true); }
-                    if let Some(task) = session_task.take() {
+                    live.stop_all();
+                    for task in live.take_tasks() {
                         let _ = tokio::time::timeout(Duration::from_secs(3), task).await;
                     }
                     break;
@@ -311,78 +335,167 @@ pub async fn run(
     Ok(())
 }
 
-/// Authenticate (the PC ID, or the paired allow-list for older clients) then
-/// spawn a session for an accepted connection.
-#[allow(clippy::too_many_arguments)]
-async fn begin_session(
-    sess: LanSession,
-    peer_label: String,
-    host_static: [u8; 32],
-    device_id: &str,
-    settings: &Settings,
+/// Check who is connecting: a first-time device proves it by knowing the PC
+/// ID; a returning one must be on the allow-list. Returns the device's short
+/// key id, or `None` if it was turned away.
+fn authorize(
+    sess: &LanSession,
+    peer_label: &str,
     paired: &mut PairedStore,
     status: &mut CoreStatus,
-    status_tx: &watch::Sender<CoreStatus>,
-    session_task: &mut Option<JoinHandle<()>>,
-    session_stop: &mut Option<watch::Sender<bool>>,
-    session_cmd_tx: &mut Option<mpsc::UnboundedSender<session::SessionCommand>>,
-) {
+) -> Option<String> {
     let peer_key = sess.peer_key();
     let key_id = rc_crypto::DeviceIdentity::key_short_id(&peer_key);
 
     if sess.was_pairing() {
         // The client proved it knows this PC's ID — that's all that's needed.
-        paired.upsert(&peer_key, &peer_label);
+        paired.upsert(&peer_key, peer_label);
         status.paired_count = paired.count();
         tracing::info!(%key_id, "device connected with the PC ID");
     } else {
         // Reconnect: must be on the allow-list.
         if !paired.is_paired(&peer_key) {
             tracing::warn!(peer = %peer_label, %key_id, "unpaired device tried to reconnect — rejected");
-            drop(sess);
-            return;
+            return None;
         }
         paired.touch(&peer_key);
         status.paired_count = paired.count();
     }
+    Some(key_id)
+}
 
-    tracing::info!(peer = %peer_label, %key_id, "connection accepted; starting session");
-    let (stop_tx, stop_rx) = watch::channel(false);
-    let params = SessionParams {
-        fps: settings.performance.max_fps.clamp(5, 120) as u32,
-        max_bitrate_kbps: settings.performance.max_bitrate_kbps,
-        mode: settings.performance.mode,
-        clipboard_sync: settings.security.clipboard_sync,
-        audio: settings.audio.enabled,
-        mic: settings.mic.enabled,
-        uncap_fps_on_direct: settings.performance.uncap_fps_on_direct,
-        multi_monitor: settings.display.multi_monitor,
-        host_static,
-        device_id: device_id.to_string(),
-        peer_key,
-    };
-    let stats = Arc::new(session::LiveStats::default());
-    let task_stats = stats.clone();
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    *session_cmd_tx = Some(cmd_tx);
-    *session_stop = Some(stop_tx);
-    *session_task = Some(tokio::spawn(async move {
-        if let Err(e) = session::run(sess, params, stop_rx, cmd_rx, task_stats).await {
-            tracing::error!(error = ?e, "session ended with error");
+impl Live {
+    /// Take in a connection that has passed the handshake: a mic-only link
+    /// (which never disturbs anything already connected) or a controlling
+    /// session (up to [`MAX_SESSIONS`] at once).
+    #[allow(clippy::too_many_arguments)]
+    async fn admit(
+        &mut self,
+        sess: LanSession,
+        peer_label: String,
+        host_static: [u8; 32],
+        device_id: &str,
+        settings: &Settings,
+        paired: &mut PairedStore,
+        status: &mut CoreStatus,
+    ) {
+        let Some(key_id) = authorize(&sess, &peer_label, paired, status) else {
+            return;
+        };
+
+        // A mic-only device says so first. The message stays queued, so a
+        // normal device's first message is still read by its session.
+        let mic_only = match sess.peek_first_control(FIRST_MESSAGE_WAIT).await {
+            Some(first) => matches!(rc_protocol::decode::<ClientMessage>(&first), Ok(ClientMessage::MicOnly)),
+            None => false,
+        };
+
+        let id = self.next_id;
+        self.next_id += 1;
+        let ended_tx = self.ended_tx.clone();
+        let (stop_tx, stop_rx) = watch::channel(false);
+
+        if mic_only {
+            // A new mic-only link replaces the old one (a dead connection never
+            // says goodbye).
+            if let Some(old) = self.mic.take() {
+                tracing::info!("a new mic-only connection arrived; replacing the previous one");
+                let _ = old.stop.send(true);
+                let _ = tokio::time::timeout(Duration::from_secs(3), old.task).await;
+            }
+            tracing::info!(peer = %peer_label, %key_id, "connection accepted; mic-only");
+            let task = tokio::spawn(async move {
+                if let Err(e) = mic_only::run(sess, stop_rx).await {
+                    tracing::error!(error = ?e, "mic-only link ended with error");
+                }
+                let _ = ended_tx.send(id);
+            });
+            self.mic = Some(MicSlot { id, task, stop: stop_tx });
+            return;
         }
-    }));
-    status.session = Some(SessionInfo {
-        route: peer_label,
-        key_id,
-        since: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        stats,
-    });
-    status.state = CoreState::Connected;
-    status.sessions = 1;
-    publish(status_tx, status);
+
+        // The same device reconnecting replaces its own old session; with no
+        // room left, the one connected longest makes way.
+        let peer_key = sess.peer_key();
+        let victim = self
+            .slots
+            .iter()
+            .position(|s| s.peer_key == peer_key)
+            .or_else(|| (self.slots.len() >= MAX_SESSIONS).then_some(0));
+        if let Some(i) = victim {
+            tracing::info!("a new connection arrived; replacing a previous session");
+            let old = self.slots.remove(i);
+            let _ = old.stop.send(true);
+            let _ = tokio::time::timeout(Duration::from_secs(8), old.task).await;
+        }
+
+        tracing::info!(peer = %peer_label, %key_id, "connection accepted; starting session");
+        let params = SessionParams {
+            fps: settings.performance.max_fps.clamp(5, 120) as u32,
+            max_bitrate_kbps: settings.performance.max_bitrate_kbps,
+            mode: settings.performance.mode,
+            clipboard_sync: settings.security.clipboard_sync,
+            audio: settings.audio.enabled,
+            mic: settings.mic.enabled,
+            uncap_fps_on_direct: settings.performance.uncap_fps_on_direct,
+            multi_monitor: settings.display.multi_monitor,
+            host_static,
+            device_id: device_id.to_string(),
+            peer_key,
+        };
+        let stats = Arc::new(session::LiveStats::default());
+        let task_stats = stats.clone();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            if let Err(e) = session::run(sess, params, stop_rx, cmd_rx, task_stats).await {
+                tracing::error!(error = ?e, "session ended with error");
+            }
+            let _ = ended_tx.send(id);
+        });
+        let info = SessionInfo {
+            route: peer_label,
+            key_id,
+            since: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            stats,
+        };
+        self.slots.push(Slot { id, peer_key, task, stop: stop_tx, cmd_tx, info });
+    }
+
+    /// Ask everything that is connected to end.
+    fn stop_all(&self) {
+        for s in &self.slots {
+            let _ = s.stop.send(true);
+        }
+        if let Some(m) = &self.mic {
+            let _ = m.stop.send(true);
+        }
+    }
+
+    /// Hand back every running task (to wait for them on shutdown).
+    fn take_tasks(&mut self) -> Vec<JoinHandle<()>> {
+        let mut tasks: Vec<JoinHandle<()>> = self.slots.drain(..).map(|s| s.task).collect();
+        if let Some(m) = self.mic.take() {
+            tasks.push(m.task);
+        }
+        tasks
+    }
+
+    /// Bring the UI-facing status in line with what is connected.
+    fn sync_status(&self, status: &mut CoreStatus, listening: bool, settings: &Settings) {
+        status.sessions = self.slots.len() as u32;
+        status.session = self.slots.last().map(|s| s.info.clone());
+        status.mic_only = self.mic.is_some();
+        status.state = if !self.slots.is_empty() {
+            CoreState::Connected
+        } else if listening {
+            CoreState::Listening
+        } else {
+            state_without_listener(settings)
+        };
+    }
 }
 
 async fn apply_listening_state(

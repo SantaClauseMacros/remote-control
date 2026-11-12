@@ -455,6 +455,11 @@ pub async fn run(
     capture_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut captured = false;
     let mut capture_streak: u8 = 0;
+    // The PC's real pointer position, sent to the device when it moves so the
+    // device's own cursor can't stay out of step with it.
+    let mut cursor_poll = tokio::time::interval(Duration::from_millis(50));
+    cursor_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_cursor: Option<(f32, f32)> = None;
     // Last `GameArea` sent, so it only goes out when the window moves.
     let mut last_area: Option<(f32, f32, f32, f32)> = None;
     // Mirrors `capture_ok` (set by the capture thread) so a Notice only goes
@@ -507,6 +512,7 @@ pub async fn run(
     let mut uploaded: HashMap<u32, PathBuf> = HashMap::new();
     let mut mic_last: Option<Instant> = None;
     let mut mic_reported = false;
+    let mut mic_muted_told = false;
     let mut mic_tick = tokio::time::interval(Duration::from_secs(1));
     // Anything at all heard from the client (it pings every few seconds).
     // A phone that lost wifi never says goodbye, so without this the session
@@ -603,8 +609,18 @@ pub async fn run(
                 last_heard = Instant::now();
                 mic_last = Some(Instant::now());
                 if let Ok(packet) = mic {
-                    if let Some(d) = rc_audio::adpcm::decode(&packet) {
-                        let _ = mic_render_tx.try_send((d.samples, d.sample_rate, d.channels));
+                    if crate::mic_only::ACTIVE.load(Ordering::Relaxed) {
+                        // A mic-only device is the PC's microphone right now;
+                        // playing this one too would mix the two together.
+                        if !mic_muted_told {
+                            mic_muted_told = true;
+                            link.send(&HostMessage::Notice("Your other device is the PC's mic right now - this device's mic is muted".into())).await;
+                        }
+                    } else {
+                        mic_muted_told = false;
+                        if let Some(d) = rc_audio::adpcm::decode(&packet) {
+                            let _ = mic_render_tx.try_send((d.samples, d.sample_rate, d.channels));
+                        }
                     }
                 }
             }
@@ -662,6 +678,18 @@ pub async fn run(
             {
                 if let Err(e) = injector.flush_due() {
                     tracing::warn!(error = %e, "deferred release failed");
+                }
+            }
+            _ = cursor_poll.tick() => {
+                if !captured {
+                    let src = Rect { x: rect.x, y: rect.y, w: rect.width as i32, h: rect.height as i32 };
+                    if let Some((x, y)) = rc_input::cursor_position_in(src) {
+                        let moved = last_cursor.map_or(true, |(lx, ly)| (lx - x).abs() > 0.0008 || (ly - y).abs() > 0.0008);
+                        if moved {
+                            last_cursor = Some((x, y));
+                            link.send(&HostMessage::CursorPos { x, y }).await;
+                        }
+                    }
                 }
             }
             _ = capture_poll.tick() => {
@@ -983,6 +1011,9 @@ async fn handle_client_msg(
                 uploaded.insert(id, f.path); // kept on disk either way; `PasteFiles` may want it
             }
         }
+        // Handled before a session starts (see the engine); nothing to do if
+        // it turns up late.
+        Ok(ClientMessage::MicOnly) => {}
         Ok(ClientMessage::RequestInfo) => {
             link.send(&HostMessage::Info {
                 version: env!("CARGO_PKG_VERSION").to_string(),

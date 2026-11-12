@@ -4,7 +4,7 @@ import init, {
   enc_scroll, enc_key, enc_text,
   enc_ping, enc_clipboard, enc_quality, enc_disconnect, enc_direct_offer, enc_direct_use,
   enc_gamepad_state, enc_gamepad_disconnect, enc_file_offer, enc_file_chunk, enc_file_done,
-  enc_request_info, enc_list_dir, enc_get_file, enc_paste_files,
+  enc_request_info, enc_mic_only, enc_list_dir, enc_get_file, enc_paste_files,
   decode_host_message, parse_video_payload, avc_codec_string, is_keyframe,
   ack_ok, ack_host_offline, ack_bad_key,
 } from './pkg/rc_web.js';
@@ -273,6 +273,7 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 /* ─────────────────────────  screen switching  ──────────────────────── */
 const screens = {
   list: $('#screen-list'), connecting: $('#screen-connecting'), viewer: $('#screen-viewer'),
+  miconly: $('#screen-miconly'),
 };
 function show(name) {
   for (const [k, el] of Object.entries(screens)) el.hidden = k !== name;
@@ -315,10 +316,12 @@ function renderList() {
         <div class="sub"></div>
       </div>
       <button class="go">Connect</button>
+      <button class="micbtn" aria-label="Mic only" title="Use this device only as the PC's microphone">🎙</button>
       <button class="kebab" aria-label="Edit">⋮</button>`;
     card.querySelector('.name').textContent = d.name;
     card.querySelector('.sub').textContent = d.deviceId;
     card.querySelector('.go').onclick = () => connect(d);
+    card.querySelector('.micbtn').onclick = () => connectMicOnly(d);
     card.querySelector('.kebab').onclick = () => openDeviceDialog(d);
     list.appendChild(card);
     checkOnline(d).then(on => {
@@ -631,8 +634,11 @@ class Conn {
             if (!this.device.hostKey) this.onpaired && this.onpaired(pkB64);
           }
           this._drain(this.sess.feed(new Uint8Array()));
+          // A mic-only link says so before anything else, so the PC runs it
+          // beside whoever is already connected instead of replacing them.
+          if (this.micOnly) this.send(enc_mic_only());
           this.onopen && this.onopen();
-          setTimeout(() => this._tryDirect(), 0);
+          if (!this.micOnly) setTimeout(() => this._tryDirect(), 0);
         }
         return;
       }
@@ -1160,6 +1166,7 @@ class Viewer {
       this.gameArea = { x: m.x, y: m.y, w: m.w, h: m.h };
       this._layoutPad();
     }
+    else if (m.kind === 'cursorpos') this._onHostCursor(m);
     else if (m.kind === 'fileoffer') this._fileOffer(m);
     else if (m.kind === 'filechunk') this._fileChunk(m);
     else if (m.kind === 'filedone') this._fileDone(m);
@@ -1335,7 +1342,22 @@ class Viewer {
   }
 
   /* ── input senders ── */
+  /** The PC reports where its pointer really is. Follow it so this device's
+   *  idea of the cursor can't drift (another device, or the PC's own mouse,
+   *  moved it) - except while this device is moving it itself, when the
+   *  report would only be an older position echoed back. */
+  _onHostCursor(m) {
+    if (performance.now() - (this._moveAt || 0) < 500) return;
+    if (this.mode === 'look') return;
+    if (Math.abs(this.cursor.x - m.x) < 0.002 && Math.abs(this.cursor.y - m.y) < 0.002) return;
+    this.cursor.x = clamp(m.x); this.cursor.y = clamp(m.y);
+    try {
+      const p = this.dec.normToScreen(this.cursor.x, this.cursor.y);
+      const c = $('#cursor'); c.style.left = p.x + 'px'; c.style.top = p.y + 'px';
+    } catch { /* no picture yet */ }
+  }
   moveTo(nx, ny) {
+    this._moveAt = performance.now();
     this.cursor.x = clamp(nx); this.cursor.y = clamp(ny);
     const p = this.dec.normToScreen(this.cursor.x, this.cursor.y);
     const c = $('#cursor'); c.hidden = false; c.style.left = p.x + 'px'; c.style.top = p.y + 'px';
@@ -2380,6 +2402,15 @@ class Viewer {
       }
       const vk = vkFor(e);
       if (!vk) return;
+      // A shifted character with no Shift press of its own (a phone / on-screen
+      // keyboard applies Shift internally): the key code alone says "1" for
+      // "!", so send the character itself instead of the unshifted key.
+      if (e.shiftKey && !down.has(16) && !e.ctrlKey && !e.altKey && !e.metaKey
+          && e.key && e.key.length === 1 && vk !== 16) {
+        e.preventDefault();
+        if (pressed && !e.repeat) this.conn.send(enc_text(e.key));
+        return;
+      }
       if (vk === 27 && pressed) this._lastEscAt = performance.now();
       // Swallowing it also keeps the character out of the hidden input, so
       // the text path below doesn't send the same keystroke a second time.
@@ -2448,6 +2479,75 @@ async function connect(device, opts = {}) {
   V.autoAttempt = opts.auto ? (opts.attempt || 1) : null;
   await V.start();
 }
+/* ───────────  mic-only mode: this device is just the PC's microphone  ───────── */
+class MicOnlySession {
+  constructor(device) {
+    this.device = device;
+    this.conn = new Conn(device);
+    this.conn.micOnly = true;
+    this.mic = new MicCapture(this.conn);
+    this.status = null;     // last mic report from the PC
+    this.ended = false;
+    this.wakeLock = null;
+  }
+  _setStatus(t) { $('#mo-status').textContent = t; }
+  async start() {
+    show('miconly');
+    $('#mo-title').textContent = `Mic → ${this.device.name}`;
+    $('#mo-level').style.width = '0';
+    this._setStatus('Connecting…');
+    this.conn.onopen = async () => {
+      this._setStatus('Starting the microphone…');
+      await this.mic.start();
+      if (this.ended) return;
+      if (!this.mic.active) return this._end('Could not use the microphone.');
+      try { this.wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+      this._ping = setInterval(() => this.conn.send(enc_ping(performance.now())), 3000);
+      this._tick = setInterval(() => this._update(), 200);
+    };
+    this.conn.onclose = (reason) => this._end(reason);
+    this.conn.onhost = (m) => {
+      if (m.kind === 'micstatus') this.status = { ...m, at: performance.now() };
+      else if (m.kind === 'notice') toast(m.text, 2400);
+      else if (m.kind === 'disconnect') this._end(m.reason);
+    };
+    this.conn.onpaired = (hostKeyB64) => {
+      const devs = store.devices;
+      const d = devs.find(x => x.id === this.device.id);
+      if (d) { d.hostKey = hostKeyB64; store.devices = devs; }
+    };
+    try { await this.conn.open(); }
+    catch (e) { this._end(String(e.message || e)); }
+  }
+  _update() {
+    $('#mo-level').style.width = Math.round(this.mic.level * 100) + '%';
+    const st = this.status, now = performance.now();
+    if (now - this.mic.lastAudio > 2500) this._setStatus('This device paused the mic - tap Stop and start again');
+    else if (!st || now - st.at > 4000 || !st.receiving) this._setStatus('Connected - waiting for the PC to receive the mic…');
+    else if (!st.virtual_cable) this._setStatus('Live, but playing on the PC speakers - install the virtual mic in the PC app');
+    else this._setStatus('Live - in Discord or your game pick "CABLE Output" as the mic');
+  }
+  _end(reason) {
+    if (this.ended) return;
+    this.ended = true;
+    clearInterval(this._ping); clearInterval(this._tick);
+    this.mic.stop();
+    try { this.wakeLock && this.wakeLock.release(); } catch {}
+    try { this.conn.close(); } catch {}
+    if (MO === this) MO = null;
+    show('list'); renderList();
+    if (reason) toast(reason, 2600);
+  }
+}
+let MO = null;
+async function connectMicOnly(device) {
+  if (V) V._end();
+  if (MO) MO._end();
+  MO = new MicOnlySession(device);
+  await MO.start();
+}
+$('#mo-stop').onclick = () => { if (MO) MO._end('Mic stopped'); };
+
 $('#btn-cancel').onclick = () => {
   stopReconnect();
   if (V) V._end(); else { show('list'); renderList(); }

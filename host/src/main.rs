@@ -21,6 +21,7 @@ mod engine;
 mod focus;
 mod gamepad;
 mod identity;
+mod mic_only;
 mod paired;
 mod platform;
 mod relay;

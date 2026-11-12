@@ -16,13 +16,12 @@ pub mod stream;
 pub use stream::{EncodedPacket, StreamEncoder};
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::{Interface, GUID, PCWSTR};
 use windows::Win32::Media::MediaFoundation::{
     IMFMediaType, IMFSinkWriter, IMFTransform, MFCreateAttributes, MFCreateMediaType,
-    MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video, MFShutdown,
+    MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video,
     MFStartup, MFT_ENUM_HARDWARE_URL_Attribute, MFVideoFormat_H264, MFVideoFormat_RGB32,
     MFVideoInterlace_Progressive, MFSTARTUP_FULL, MF_LOW_LATENCY, MF_MT_AVG_BITRATE,
     MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
@@ -31,28 +30,27 @@ use windows::Win32::Media::MediaFoundation::{
 };
 
 /// One-per-process Media Foundation runtime. Hold it for as long as any MF
-/// object is alive; drop it (last) on shutdown.
+/// object is alive.
+///
+/// The platform is started once and then left running for the life of the
+/// process. Shutting it down when the last encoder went away (the end of a
+/// session) tore down the MF work queues while the NVIDIA H.264 encoder still
+/// had work posted to them, which crashed the whole app with an access
+/// violation on every disconnect.
 pub struct MediaFoundation {
     _private: (),
 }
 
-static MF_REFCOUNT: AtomicUsize = AtomicUsize::new(0);
+static MF_STARTED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
 impl MediaFoundation {
     pub fn init() -> Result<Self> {
-        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup")? };
-        MF_REFCOUNT.fetch_add(1, Ordering::SeqCst);
-        Ok(Self { _private: () })
-    }
-}
-
-impl Drop for MediaFoundation {
-    fn drop(&mut self) {
-        if MF_REFCOUNT.fetch_sub(1, Ordering::SeqCst) == 1 {
-            unsafe {
-                let _ = MFShutdown();
-            }
+        let mut started = MF_STARTED.lock().unwrap_or_else(|p| p.into_inner());
+        if !*started {
+            unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup")? };
+            *started = true;
         }
+        Ok(Self { _private: () })
     }
 }
 

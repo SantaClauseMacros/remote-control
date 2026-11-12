@@ -138,6 +138,12 @@ export function enc_key(code: number, pressed: boolean): Uint8Array;
 export function enc_list_dir(path: string): Uint8Array;
 
 /**
+ * Tell the PC this connection is only for the microphone (see
+ * `ClientMessage::MicOnly`) - send it first, before anything else.
+ */
+export function enc_mic_only(): Uint8Array;
+
+/**
  * Paste files this device already uploaded (by transfer id) into whatever
  * text box has focus on the PC.
  */
@@ -226,6 +232,7 @@ export interface InitOutput {
     readonly enc_get_file: (a: number, b: number, c: number) => void;
     readonly enc_key: (a: number, b: number, c: number) => void;
     readonly enc_list_dir: (a: number, b: number, c: number) => void;
+    readonly enc_mic_only: (a: number) => void;
     readonly enc_paste_files: (a: number, b: number, c: number) => void;
     readonly enc_ping: (a: number, b: number) => void;
     readonly enc_pointer_button: (a: number, b: number, c: number, d: number, e: number) => void;

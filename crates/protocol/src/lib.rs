@@ -82,6 +82,11 @@ pub enum ClientMessage {
     /// Files the client just uploaded (by transfer id): put them on the PC's
     /// clipboard and press Ctrl+V, so they land in whatever box has focus.
     PasteFiles { ids: Vec<u32> },
+    /// "I'm only here for the microphone": sent first on a new connection so
+    /// the PC runs it as a light mic-only link (no screen, no input) beside
+    /// whatever device is already controlling it, instead of replacing that
+    /// device's session. Appended last, so older PC apps just ignore it.
+    MicOnly,
 }
 
 /// Messages sent from the host to a controlling client.
@@ -151,6 +156,12 @@ pub enum HostMessage {
         /// Set (with empty `entries`) when the folder couldn't be read.
         error: Option<String>,
     },
+    /// Where the PC's mouse pointer really is, as fractions (`0.0..=1.0`) of
+    /// the streamed display. Sent whenever it moves and no game has captured
+    /// it, so a device whose own idea of the pointer has drifted (another
+    /// device or the PC's own mouse moved it) can catch up. Appended last, so
+    /// older clients ignore it.
+    CursorPos { x: f32, y: f32 },
 }
 
 /// One file or folder in a [`HostMessage::DirListing`].

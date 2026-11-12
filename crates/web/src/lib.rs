@@ -499,6 +499,13 @@ pub fn enc_request_info() -> Vec<u8> {
     enc(&ClientMessage::RequestInfo)
 }
 
+/// Tell the PC this connection is only for the microphone (see
+/// `ClientMessage::MicOnly`) - send it first, before anything else.
+#[wasm_bindgen]
+pub fn enc_mic_only() -> Vec<u8> {
+    enc(&ClientMessage::MicOnly)
+}
+
 /// List a folder on the PC (empty string = the starting list).
 #[wasm_bindgen]
 pub fn enc_list_dir(path: &str) -> Vec<u8> {
@@ -564,6 +571,7 @@ pub fn decode_host_message(payload: &[u8]) -> Result<JsValue, JsValue> {
                 .collect(),
             error,
         },
+        HostMessage::CursorPos { x, y } => HostMsgJs::CursorPos { x, y },
         HostMessage::Displays(d) => HostMsgJs::Displays {
             displays: d
                 .into_iter()
@@ -589,6 +597,8 @@ enum HostMsgJs {
     Notice { text: String },
     Disconnect { reason: String },
     Displays { displays: Vec<DisplayJs> },
+    /// `kind: "cursorpos"` - where the PC's pointer is (fractions of the display).
+    CursorPos { x: f32, y: f32 },
     /// `kind: "cursorcaptured"`
     CursorCaptured { captured: bool },
     /// `kind: "gamearea"` — fractions of the streamed display.

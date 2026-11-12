@@ -113,6 +113,21 @@ pub fn cursor_captured() -> bool {
     }
 }
 
+/// Where the PC's mouse pointer is, as fractions of `source` (the streamed
+/// display). `None` if it can't be read or is outside that display.
+pub fn cursor_position_in(source: Rect) -> Option<(f32, f32)> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    if source.w <= 0 || source.h <= 0 {
+        return None;
+    }
+    let mut p = POINT::default();
+    unsafe { GetCursorPos(&mut p).ok()? };
+    let nx = (p.x - source.x) as f32 / source.w as f32;
+    let ny = (p.y - source.y) as f32 / source.h as f32;
+    ((0.0..=1.0).contains(&nx) && (0.0..=1.0).contains(&ny)).then_some((nx, ny))
+}
+
 /// A rectangle in virtual-desktop pixel coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {

@@ -549,9 +549,23 @@ impl EncoderState {
 
 impl Drop for EncoderState {
     fn drop(&mut self) {
-        // Releases the MFT's resources — for a hardware encoder, its GPU
-        // encode session — which dropping the COM reference alone does not.
         unsafe {
+            // A hardware MFT posts its own work items to the MF work queues.
+            // Throw away anything still queued and give those items a moment
+            // to run before the MFT is destroyed, or one fires into freed
+            // memory and takes the whole process down.
+            if let Some(events) = &self.events {
+                for _ in 0..64 {
+                    if events.GetEvent(MF_EVENT_FLAG_NO_WAIT).is_err() {
+                        break;
+                    }
+                }
+            }
+            if self.async_mode {
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            // Releases the MFT's resources — for a hardware encoder, its GPU
+            // encode session — which dropping the COM reference alone does not.
             let _ = self.activate.ShutdownObject();
         }
     }

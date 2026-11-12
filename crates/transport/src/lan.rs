@@ -279,6 +279,9 @@ async fn read_message(rd: &mut BoxRead, noise: &Mutex<TransportState>) -> TResul
 struct Control {
     wire: Arc<Wire>,
     rx: Mutex<mpsc::Receiver<Vec<u8>>>,
+    /// A message that was peeked at (see `LanSession::peek_first_control`) and
+    /// must still be delivered, first, to whoever reads next.
+    unread: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 #[async_trait::async_trait]
@@ -287,6 +290,9 @@ impl ControlChannel for Control {
         self.wire.write_message(CH_CONTROL, &bytes).await
     }
     async fn recv(&self) -> TResult<Vec<u8>> {
+        if let Some(first) = self.unread.lock().unwrap().take() {
+            return Ok(first);
+        }
         self.rx
             .lock()
             .await
@@ -369,6 +375,18 @@ impl LanSession {
     /// Was this a first-time (code-authenticated) pairing?
     pub fn was_pairing(&self) -> bool {
         self.was_pairing
+    }
+
+    /// Wait up to `wait` for the client's first control message and return a
+    /// copy of it. The message stays queued, so the session that takes over
+    /// this connection still reads it as normal; nothing is lost. `None` if
+    /// nothing arrived in time (or the connection closed).
+    pub async fn peek_first_control(&self, wait: Duration) -> Option<Vec<u8>> {
+        let first = tokio::time::timeout(wait, async { self.control.rx.lock().await.recv().await })
+            .await
+            .ok()??;
+        *self.control.unread.lock().unwrap() = Some(first.clone());
+        Some(first)
     }
 
     /// Has the underlying connection ended?
@@ -475,6 +493,7 @@ impl LanSession {
             control: Control {
                 wire: wire.clone(),
                 rx: Mutex::new(ctrl_rx),
+                unread: std::sync::Mutex::new(None),
             },
             video: Video {
                 wire,

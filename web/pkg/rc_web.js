@@ -590,6 +590,25 @@ export function enc_list_dir(path) {
 }
 
 /**
+ * Tell the PC this connection is only for the microphone (see
+ * `ClientMessage::MicOnly`) - send it first, before anything else.
+ * @returns {Uint8Array}
+ */
+export function enc_mic_only() {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.enc_mic_only(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v1 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v1;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
  * Paste files this device already uploaded (by transfer id) into whatever
  * text box has focus on the PC.
  * @param {Uint32Array} ids
