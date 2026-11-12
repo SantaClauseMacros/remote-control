@@ -79,10 +79,32 @@ fn main() -> Result<()> {
     // --admin-task so the elevated copy never does this itself.
     let is_admin_task = std::env::args().any(|a| a == platform::admin_task::ARG);
     if !is_admin_task && !platform::elevate::is_elevated() {
-        if let Ok(s) = Settings::load(&paths.config_file()) {
-            if s.run_as_admin && platform::admin_task::hand_off() {
+        let mut s = Settings::load(&paths.config_file()).unwrap_or_default();
+        if s.run_as_admin {
+            if platform::admin_task::hand_off() {
                 tracing::info!("handed off to the elevated copy");
                 return Ok(());
+            }
+            // Administrator is on by default but its launch task isn't set up
+            // yet: restart elevated once (one UAC prompt) so that copy creates
+            // it, and every launch after this one needs no prompt. Declining
+            // turns the setting off rather than asking again at every start.
+            if !platform::admin_task::exists() {
+                if let Ok(exe) = std::env::current_exe() {
+                    match platform::elevate::relaunch_elevated(&exe, "") {
+                        Ok(()) => {
+                            tracing::info!("restarting as Administrator to set up the launch task");
+                            return Ok(());
+                        }
+                        Err(code) => {
+                            tracing::info!(code, "Administrator was declined; turning the setting off");
+                            s.run_as_admin = false;
+                            if let Err(e) = s.save(&paths.config_file()) {
+                                tracing::warn!(error = %e, "could not save the setting");
+                            }
+                        }
+                    }
+                }
             }
         }
     }
