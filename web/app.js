@@ -2491,7 +2491,52 @@ class MicOnlySession {
     this.wakeLock = null;
   }
   _setStatus(t) { $('#mo-status').textContent = t; }
+
+  /** Phones pause a page's microphone when it leaves the screen. Playing an
+   *  inaudible looping sound with media controls (what a music player does)
+   *  makes the browser treat the page as live media and keeps it running in
+   *  the background on most Android browsers. iPhones still suspend it - there
+   *  the page has to stay open and on screen. Must start from the tap. */
+  _keepAlive() {
+    try {
+      const rate = 8000, n = rate; // one second of silence
+      const buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+      const w = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+      w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVEfmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+      w(36, 'data'); v.setUint32(40, n, true);
+      new Uint8Array(buf, 44).fill(128); // 8-bit PCM silence
+      this._silenceUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+      const a = new Audio(this._silenceUrl);
+      a.loop = true;
+      this._silence = a;
+      a.play().catch(() => {});
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: 'Microphone → ' + this.device.name, artist: 'Remote Control' });
+        navigator.mediaSession.playbackState = 'playing';
+        try { navigator.mediaSession.setActionHandler('stop', () => this._end('Mic stopped')); } catch {}
+      }
+    } catch { /* not every browser has these */ }
+  }
+
+  /** Bring the mic back after the browser paused or cut it. */
+  async _revive() {
+    if (this.ended || this._reviving) return;
+    this._reviving = true;
+    try {
+      if (this._silence && this._silence.paused) this._silence.play().catch(() => {});
+      const m = this.mic;
+      const dead = !m.stream || m.stream.getTracks().every(t => t.readyState === 'ended');
+      if (dead) { m.stop(); await m.start(); }
+      else if (m.ctx && m.ctx.state !== 'running') await m.ctx.resume().catch(() => {});
+    } finally { this._reviving = false; }
+  }
+
   async start() {
+    this._keepAlive();
+    this._onVis = () => { if (!document.hidden) this._revive(); };
+    document.addEventListener('visibilitychange', this._onVis);
     show('miconly');
     $('#mo-title').textContent = `Mic → ${this.device.name}`;
     $('#mo-level').style.width = '0';
@@ -2522,7 +2567,10 @@ class MicOnlySession {
   _update() {
     $('#mo-level').style.width = Math.round(this.mic.level * 100) + '%';
     const st = this.status, now = performance.now();
-    if (now - this.mic.lastAudio > 2500) this._setStatus('This device paused the mic - tap Stop and start again');
+    if (now - this.mic.lastAudio > 2500) {
+      this._setStatus(document.hidden ? 'Mic paused while the page is off screen' : 'Mic paused - restarting it…');
+      if (!document.hidden) this._revive();
+    }
     else if (!st || now - st.at > 4000 || !st.receiving) this._setStatus('Connected - waiting for the PC to receive the mic…');
     else if (!st.virtual_cable) this._setStatus('Live, but playing on the PC speakers - install the virtual mic in the PC app');
     else this._setStatus('Live - in Discord or your game pick "CABLE Output" as the mic');
@@ -2531,6 +2579,10 @@ class MicOnlySession {
     if (this.ended) return;
     this.ended = true;
     clearInterval(this._ping); clearInterval(this._tick);
+    document.removeEventListener('visibilitychange', this._onVis);
+    try { this._silence && this._silence.pause(); } catch {}
+    try { this._silenceUrl && URL.revokeObjectURL(this._silenceUrl); } catch {}
+    try { if ('mediaSession' in navigator) { navigator.mediaSession.playbackState = 'none'; navigator.mediaSession.metadata = null; } } catch {}
     this.mic.stop();
     try { this.wakeLock && this.wakeLock.release(); } catch {}
     try { this.conn.close(); } catch {}
