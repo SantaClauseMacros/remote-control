@@ -160,7 +160,7 @@ impl Default for Settings {
             computer_name: default_computer_name(),
             enable_remote_access: true,
             start_with_windows: false,
-            run_as_admin: true,
+            run_as_admin: false,
             performance: PerformanceSettings::default(),
             network: NetworkSettings::default(),
             security: SecuritySettings::default(),
