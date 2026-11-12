@@ -10,7 +10,7 @@ import init, {
 } from './pkg/rc_web.js';
 
 /** This web app's version - compared with the PC app's to say "update the PC". */
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 const verLess = (a, b) => {
   const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
   for (let i = 0; i < 3; i++) {
