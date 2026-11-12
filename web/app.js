@@ -170,6 +170,17 @@ class MicCapture {
     this.lastAudio = 0;  // when the browser last handed us mic audio
   }
   get active() { return !!this.node; }
+  /** Create the audio engine while still inside the user's tap. iPhone Safari
+   *  only lets a page start audio from a tap, and the mic is otherwise started
+   *  after the network connects - too late, so it stayed paused. */
+  prepare() {
+    if (this.ctx) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new Ctx();
+      if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    } catch {}
+  }
   async start() {
     if (this.node) return;
     let stream;
@@ -184,7 +195,7 @@ class MicCapture {
     }
     this.stream = stream;
     const Ctx = window.AudioContext || window.webkitAudioContext;
-    this.ctx = new Ctx();
+    if (!this.ctx) this.ctx = new Ctx();
     const state = { predictor: 0, index: 0 };
     const src = this.ctx.createMediaStreamSource(stream);
     this.node = this.ctx.createScriptProcessor(2048, 1, 1);
@@ -2535,6 +2546,7 @@ class MicOnlySession {
 
   async start() {
     this._keepAlive();
+    this.mic.prepare();
     this._onVis = () => { if (!document.hidden) this._revive(); };
     document.addEventListener('visibilitychange', this._onVis);
     show('miconly');
