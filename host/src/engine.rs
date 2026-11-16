@@ -307,14 +307,11 @@ pub async fn run(
                     }
                 }
                 Some(CoreCommand::InstallUpdate(download_url)) => {
-                    tokio::spawn(async move {
-                        match tokio::task::spawn_blocking(move || crate::update::apply_update(&download_url)).await {
-                            Ok(Ok(())) => {
-                                tracing::info!("update downloaded; restarting to install it");
-                                crate::platform::message_window::post_command(crate::platform::tray::ID_EXIT);
-                            }
-                            Ok(Err(e)) => tracing::warn!(error = ?e, "installing the update failed"),
-                            Err(e) => tracing::warn!(error = ?e, "update install task panicked"),
+                    // Opens the installer download in the browser; the app keeps
+                    // running until the person runs the new installer.
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(e) = crate::update::apply_update(&download_url) {
+                            tracing::warn!(error = ?e, "opening the update download failed");
                         }
                     });
                 }

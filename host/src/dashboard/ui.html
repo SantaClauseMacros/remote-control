@@ -173,7 +173,7 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0
     <div class="banner" id="banner-update" hidden>
       <div><b>Update available — <span id="upd-ver"></span></b><div class="dim small" id="upd-notes"></div></div>
       <div class="row">
-        <button class="btn primary" id="btn-install-update" hidden>Install now</button>
+        <button class="btn primary" id="btn-install-update" hidden>Download update</button>
         <button class="btn" id="btn-update">Release notes</button>
       </div>
     </div>
@@ -586,7 +586,7 @@ function renderChecks() {
   else add('warn', "Doesn't start with Windows", "If the PC restarts, you won't be able to connect until someone opens Remote Control.", ['Turn on', () => saveSetting('startWithWindows', true)]);
   if (s.session && !s.session.hardwareEncoder) add('warn', 'Using slower CPU video encoding', 'Your graphics card encoder is busy or unavailable. Closing Parsec, OBS or ShadowPlay usually frees it.');
   if (s.virtualMic) add('ok', 'Phone mic works in Discord & games', 'A virtual microphone is installed. In Discord / your game, set the microphone to "CABLE Output", then tap ⋯ → Mic on your phone.');
-  else add('info', 'Phone mic needs a virtual microphone', 'Windows can not turn a phone into a mic by itself. This installs VB-CABLE (free) — then pick "CABLE Output" as the mic in Discord. Restart Discord afterwards (the PC only if "CABLE Output" still is not listed).', ['Install virtual microphone', () => action('installVirtualMic')]);
+  else add('info', 'Phone mic needs a virtual microphone', 'Windows can not turn a phone into a mic by itself. This opens the VB-CABLE (free) download page — install it, then pick "CABLE Output" as the mic in Discord. Restart Discord afterwards (the PC only if "CABLE Output" still is not listed).', ['Get the virtual microphone', () => action('installVirtualMic')]);
   if (s.elevated) add('ok', 'Running as Administrator', 'You can control Task Manager and admin prompts.');
   else add('info', 'Admin windows need Administrator', "Task Manager and admin prompts ignore remote clicks unless Remote Control runs as Administrator.", ['Restart as Administrator', () => action('restartAdmin')]);
   const ul = $('#checks');
@@ -700,7 +700,7 @@ async function loadActivity() {
 /* ── actions ── */
 async function action(name) {
   if (name === 'restartAdmin' && !await confirmBox('Restart as Administrator?', 'Windows will ask for permission. Any connected device will be disconnected for a few seconds.', 'Restart')) return;
-  if (name === 'installVirtualMic' && !await confirmBox('Install the virtual microphone?', 'This downloads VB-CABLE (a free virtual audio cable from vb-audio.com) and runs its installer. Windows will ask for permission, and you should restart Discord afterwards.', 'Install')) return;
+  if (name === 'installVirtualMic' && !await confirmBox('Get the virtual microphone?', 'This opens the VB-CABLE download page (a free virtual audio cable from vb-audio.com) in your browser. Download it, run its installer, then restart Discord.', 'Open page')) return;
   if (name === 'exit' && !await confirmBox('Exit Remote Control?', "Nobody will be able to connect to this PC until it's started again.", 'Exit')) return;
   try {
     const r = await api('/api/action', { action: name });

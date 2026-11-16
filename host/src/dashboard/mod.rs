@@ -587,30 +587,11 @@ fn pick_file_dialog() -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-/// Download VB-CABLE (a free virtual audio cable by VB-Audio) and run its
-/// installer, which shows its own Windows (UAC) prompt. Only ever runs when the
-/// user presses the button; nothing is installed otherwise. The download and
-/// install happen in a hidden PowerShell so the dashboard stays responsive.
+/// Open the VB-CABLE download page (a free virtual audio cable by VB-Audio) in
+/// the browser. The person downloads and runs its installer themselves; this
+/// app no longer downloads and runs programs on its own.
 fn install_virtual_mic() {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let script = r#"
-$ErrorActionPreference = 'Stop'
-$dir = Join-Path $env:TEMP 'rc-vbcable'
-Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $dir | Out-Null
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Invoke-WebRequest -UseBasicParsing 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip' -OutFile "$dir\pack.zip"
-Expand-Archive "$dir\pack.zip" -DestinationPath $dir -Force
-Start-Process "$dir\VBCABLE_Setup_x64.exe" -ArgumentList '-i','-h' -Verb RunAs -Wait
-"#;
-    let result = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
-    if let Err(e) = result {
-        tracing::warn!(error = %e, "couldn't start the virtual microphone installer");
-    }
+    shell_open(std::ffi::OsStr::new("https://vb-audio.com/Cable/"));
 }
 
 fn shell_open(target: &std::ffi::OsStr) {

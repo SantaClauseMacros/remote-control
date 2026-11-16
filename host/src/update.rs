@@ -11,9 +11,8 @@
 //! Disabled by default (`check_url: None`): a host that hasn't opted in makes
 //! no network calls for this at all.
 
-use std::io::Read;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{ensure, Result};
 use rc_common::AppPaths;
 use serde::Deserialize;
 use tokio::sync::watch;
@@ -105,27 +104,16 @@ fn check_once(url: &str) -> anyhow::Result<Option<UpdateInfo>> {
 /// right after a successful call, the same way the installer's own
 /// `CloseApplications` would, just without needing that prompt.
 pub fn apply_update(download_url: &str) -> Result<()> {
+    use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     ensure!(!download_url.is_empty(), "this update has no installer link");
-    let resp = ureq::get(download_url)
-        .timeout(std::time::Duration::from_secs(120))
-        .call()
-        .context("downloading the update")?;
-    let mut buf = Vec::new();
-    resp.into_reader()
-        .take(200_000_000) // sanity cap; the real installer is a few MB
-        .read_to_end(&mut buf)
-        .context("reading the downloaded update")?;
-    ensure!(buf.len() > 1_000_000, "the downloaded update looks too small to be real");
-    ensure!(buf.starts_with(b"MZ"), "the downloaded file isn't a Windows executable");
-
-    let path = std::env::temp_dir().join("RemoteControlSetup-update.exe");
-    std::fs::write(&path, &buf).context("saving the downloaded update")?;
-    tracing::info!(bytes = buf.len(), path = %path.display(), "update downloaded");
-
-    std::process::Command::new(&path)
-        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
-        .spawn()
-        .context("launching the installer")?;
+    // Opened in the browser for the person to download and run themselves; the
+    // app no longer downloads and launches installers on its own.
+    let code = unsafe {
+        ShellExecuteW(None, w!("open"), &HSTRING::from(download_url), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL).0 as isize
+    };
+    ensure!(code > 32, "couldn't open the download page");
     Ok(())
 }
 
