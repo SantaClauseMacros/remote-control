@@ -60,6 +60,14 @@ pub fn spawn(
             let reachable_after = tokio::time::sleep(Duration::from_secs(3));
             tokio::pin!(reachable_after);
             let mut marked = false;
+            // A parked connection can stay open on this end while the relay has
+            // quietly forgotten it (the relay keeps its list in memory), which
+            // leaves this PC "offline" to every device even though the app
+            // believes it is waiting. So once a minute, ask the relay whether
+            // it still lists this PC, and start over if it doesn't.
+            let mut verify = tokio::time::interval(Duration::from_secs(60));
+            verify.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            verify.tick().await; // the first tick fires at once
             let outcome = loop {
                 tokio::select! {
                     _ = stop.changed() => break None,
@@ -67,6 +75,26 @@ pub fn spawn(
                     _ = &mut reachable_after, if !marked => {
                         marked = true;
                         online.store(true, Ordering::Relaxed);
+                    }
+                    _ = verify.tick(), if marked && is_ws => {
+                        let asked = tokio::time::timeout(
+                            Duration::from_secs(8),
+                            rc_transport::relay::query_host_ws(&relay_addr, &device_id, key.clone()),
+                        ).await;
+                        if matches!(asked, Ok(Ok(false))) {
+                            // Not listed. A client may have been spliced in this
+                            // very moment (which also unlists us), so give the
+                            // park a moment to finish before giving up on it.
+                            match tokio::time::timeout(Duration::from_secs(3), &mut park).await {
+                                Ok(res) => break Some(res),
+                                Err(_) => {
+                                    tracing::warn!("the relay no longer lists this PC; registering again");
+                                    break Some(Err(rc_transport::TransportError::Other(
+                                        "the relay forgot this PC".into(),
+                                    )));
+                                }
+                            }
+                        }
                     }
                 }
             };

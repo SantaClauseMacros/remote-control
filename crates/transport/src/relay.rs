@@ -199,6 +199,37 @@ pub async fn park_as_host_ws(url: &str, device_id: &str, key: Option<String>) ->
     }
 }
 
+/// Ask a WebSocket relay whether a host is currently parked under `device_id`,
+/// without disturbing it (`Hello::Query`). `Ok(true)` = listed, `Ok(false)` =
+/// the relay has no host for that ID. A host uses this on itself to notice a
+/// registration the relay has silently lost.
+pub async fn query_host_ws(url: &str, device_id: &str, key: Option<String>) -> TResult<bool> {
+    ensure_tls_provider();
+    let (mut ws, _) = tokio_tungstenite::connect_async_with_config(url, None, true)
+        .await
+        .map_err(io)?;
+    let hello = rc_protocol::encode(&Hello::Query {
+        device_id: device_id.to_string(),
+        key,
+    });
+    ws.send(Message::Binary(hello)).await.map_err(io)?;
+    loop {
+        match ws.next().await {
+            Some(Ok(Message::Binary(b))) if !b.is_empty() => {
+                return match b[0] {
+                    ACK_OK => Ok(true),
+                    ACK_HOST_OFFLINE => Ok(false),
+                    ACK_BAD_KEY => Err(TransportError::Handshake("relay rejected the access key".into())),
+                    other => Err(io(format!("relay sent unexpected ack {other} to a query"))),
+                };
+            }
+            Some(Ok(_)) => continue,
+            Some(Err(e)) => return Err(io(e)),
+            None => return Err(io("relay closed the connection before answering")),
+        }
+    }
+}
+
 /// Connect through a WebSocket-only relay as a client (mirrors
 /// [`connect_as_client`]). Not currently used by any first-party client —
 /// the web client speaks WebSocket natively from `rc-web`'s own WASM code,
